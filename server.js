@@ -4,10 +4,12 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { chooseLocalCase, offlineClientReply } from './offline-cases.js';
+import {CATALOG_TESTS, BY_ID, classifyTest} from './catalog.js';
+import {questionIntent,normalizeQuestion} from './memory.js';
 
 const ROOT=path.dirname(fileURLToPath(import.meta.url));
 const PORT=Number(process.env.PORT||3000);
-const VERSION='2.1.0';
+const VERSION='2.4.0';
 const FORCE_LOCAL=process.env.ACADEMY_LOCAL_ONLY==='1';
 const MODEL=(process.env.GEMINI_MODEL||'gemini-3.8-flash').replace(/^models\//,'');
 const GEMINI_API_KEY=process.env.GEMINI_API_KEY||'';
@@ -17,7 +19,7 @@ const CIPHER_KEY=crypto.createHash('sha256').update(process.env.ACADEMY_SECRET||
 const counters=new Map();
 const allowedAssets=new Map([
   ['/','index.html'],['/index.html','index.html'],['/style.css','style.css'],
-  ['/app.js','app.js'],['/workshop3d.js','workshop3d.js'],
+  ['/app.js','app.js'],['/workshop3d.js','workshop3d.js'],['/catalog.js','catalog.js'],['/memory.js','memory.js'],
   ['/manifest.webmanifest','manifest.webmanifest'],['/sw.js','sw.js'],['/icon.svg','icon.svg']
 ]);
 function send(res,status,body){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'});res.end(JSON.stringify(body));}
@@ -40,7 +42,7 @@ const reviewSchema=obj({feedback:S.string,strengths:arr(S.string),improvements:a
 const auditSchema=obj({approved:S.boolean,issues:arr(S.string)});
 const studySchema=obj({title:S.string,summary:S.string,steps:arr(S.string),warnings:arr(S.string),quiz:arr(obj({question:S.string,answer:S.string})),sourceStatus:S.string});
 const CORE=`Eres un diseñador de simuladores de diagnóstico automotriz para técnicos mecánicos chilenos. SOLO vehículos de combustión (no híbridos ni eléctricos). Usa lenguaje natural del taller en Chile. No inventes valores OEM ni afirmes manuales oficiales que no consultaste. Toda lectura es SIMULADA, diseñada para ese caso. Si la falla necesita un dato específico no verificado, usa comparaciones relativas, tensiones de alimentación bien fundamentadas o lectura cualitativa. Las pruebas se deben condicionar a estado de motor/conector/temperatura. Prohíbe métodos inseguros: jamás recomendar medir resistencia en circuito energizado, ni cortocircuitar pines, ni alta tensión, ni manipular sistemas de seguridad de forma peligrosa. Los casos deben tener causa fija y evidencias consistentes. Nunca atribuyas síntomas de forma imposible; la descripción es para entrenamiento, no reparación real.`;
-const CASE_SYS=CORE+`\nGenera un NUEVO caso técnicamente coherente. No repitas vehículos/causas recientes que se incluyan en la solicitud. Privilegia marcas/modelos frecuentes de Chile, diferentes años/motores compatibles; si no estás seguro del motor exacto, usa "versión a confirmar" en lugar de inventarlo. Asigna bodyType según carrocería real del modelo (hatchback, sedan, suv, pickup o van). Vehículo con personalidad e historial originales; 8 a 11 pruebas diagnósticas, mezclando pruebas decisivas, neutras, verificación y descartes; cada prueba result y reading permanentes, no contradicciones; las pruebas con multímetro deben indicar mode (DCV/ACV/OHM/CONT), positive y negative (puntos de conexión claros) y safety; las otras pueden poner mode="N/A", positive="N/A", negative="N/A". Al menos 2 pruebas decisivas (decisive true), al menos 2 con multímetro si sistema es eléctrico o motor electrónico. 4 a 6 reparaciones y EXACTAMENTE UNA con correct=true; reparaciones incorrectas no solucionan la causa. No mostrar la causa al cliente. customer.answers contiene hechos que el propietario sí conoce para responder coherente; no información de scanner. Usa id cortos únicos letras/números. Alterna sistemas motor, electrónica de baja tensión, suspensión, dirección, frenos, transmisión, climatización, carga/arranque. No incluir sistema SRS/airbags o alto voltaje. Los valores en reading son didácticos, NO presentarlos como manual OEM. Toda lectura debe explicar las condiciones de medición en setup. Las lecturas se fijan para todo el caso. Revisa internamente coherencia antes de devolver JSON.`;
+const CASE_SYS=CORE+`\nGenera un NUEVO caso técnicamente coherente. No repitas vehículos/causas recientes que se incluyan en la solicitud. Usa el objeto de entrada como plantilla de caso diferente en CADA generación, considera recentGenerations y nonce. Responde solo un caso completo; ninguna explicación adicional. TODOS LOS CLIENTES TIENEN NOMBRES MASCULINOS CHILENOS. customer.answers incluye hechos del cliente para contestar las preguntas habituales señaladas por learnedIntents, sin que el cliente sepa la falla. Usa vocabulario chileno: motor de partida, correa de accesorios, mantención, tren delantero, bujías, ampolletas, bencina cuando aplique; evita términos como centralita, jaloneos, cajuela y calarse.  Privilegia marcas/modelos frecuentes de Chile, diferentes años/motores compatibles; si no estás seguro del motor exacto, usa "versión a confirmar" en lugar de inventarlo. Asigna bodyType según carrocería real del modelo (hatchback, sedan, suv, pickup o van). Vehículo con personalidad e historial originales; 8 a 11 pruebas diagnósticas, mezclando pruebas decisivas, neutras, verificación y descartes; cada prueba result y reading permanentes, no contradicciones; las pruebas con multímetro deben indicar mode (DCV/ACV/OHM/CONT), positive y negative (puntos de conexión claros) y safety; las otras pueden poner mode="N/A", positive="N/A", negative="N/A". Al menos 2 pruebas decisivas (decisive true), al menos 2 con multímetro si sistema es eléctrico o motor electrónico. 4 a 6 reparaciones y EXACTAMENTE UNA con correct=true; reparaciones incorrectas no solucionan la causa. No mostrar la causa al cliente. customer.answers contiene hechos que el propietario sí conoce para responder coherente; no información de scanner. Usa id cortos únicos letras/números. Alterna sistemas motor, electrónica de baja tensión, suspensión, dirección, frenos, transmisión, climatización, carga/arranque. No incluir sistema SRS/airbags o alto voltaje. Los valores en reading son didácticos, NO presentarlos como manual OEM. Toda lectura debe explicar las condiciones de medición en setup. Las lecturas se fijan para todo el caso. Revisa internamente coherencia antes de devolver JSON.`;
 function jsonFromInteraction(j){let output=j.output_text;if(!output&&Array.isArray(j.outputs))output=j.outputs.filter(o=>o.type==='text').map(o=>o.text||'').join('');if(!output&&Array.isArray(j.output))output=j.output.filter(o=>o.type==='text').map(o=>o.text||'').join('');if(!output&&Array.isArray(j.steps))output=j.steps.filter(o=>o.type==='model_output').flatMap(o=>o.content||[]).map(o=>o.text||'').join('');if(!output)throw new Error('Gemini devolvió una respuesta sin texto.');try{return JSON.parse(String(output).replace(/^```json\s*|```\s*$/g,''));}catch{throw new Error('La respuesta de Gemini no fue JSON válido.');}}
 async function gemini(system,payload,schema,thinking='medium'){
  if(MOCK)return mockResponse(system,payload);
@@ -62,22 +64,47 @@ function validateCase(c){
  if(c.tests.filter(t=>t.decisive).length<1)throw new Error('El caso no tiene pruebas concluyentes.');
  for(const t of c.tests){if(!['scanner','multimeter','visual','mechanical','pressure','oscilloscope'].includes(t.tool)||!['engine','electrical','front','rear','cabin','underbody'].includes(t.zone)||typeof t.result!=='string'||!t.label)throw new Error('Prueba inválida en el caso.');}
  for(const k of ['hiddenCause','technicalReason','confirmation'])if(typeof c[k]!=='string'||!c[k].trim())throw new Error('Falta justificación diagnóstica.');
+ // Normalización del perfil: solo cambia identidad del cliente, nunca los datos técnicos.
+ const male=['Matías','Diego','Felipe','Rodrigo','Javier','Sebastián','Cristóbal','Nicolás','Andrés','Francisco','Gabriel','Tomás'];
+ if(!male.includes(String(c.customer.name||'').trim().split(' ')[0])) c.customer.name=male[crypto.randomInt(male.length)];
+ if(c.customer.personality)c.customer.personality=String(c.customer.personality).replace(/Cercana/g,'Cercano').replace(/preocupada/g,'preocupado').replace(/práctica/g,'práctico');
+ // Terminología preferida en Chile en los textos que verá el estudiante.
+ const localize=v=>String(v||'').replace(/\bse cala\b/gi,'se apaga').replace(/\bcalarse\b/gi,'apagarse').replace(/\bjaloneos\b/gi,'tirones').replace(/\bcentralita\b/gi,'computador').replace(/\bcajuela\b/gi,'maletero').replace(/\bcapot\b/gi,'capó');
+ for(const k of ['title','complaint','environment'])c[k]=localize(c[k]);
+ for(const k of ['opening','personality'])c.customer[k]=localize(c.customer[k]);
+ for(const t of c.tests)for(const k of ['label','result','reading','significance','setup'])t[k]=localize(t[k]);
  c.id=crypto.randomUUID();c.createdAt=new Date().toISOString();return c;
 }
 function publicCase(c){return {id:c.id,createdAt:c.createdAt,origin:c.origin==='local'?'local':'ai',title:c.title,vehicle:c.vehicle,customer:{name:c.customer.name,personality:c.customer.personality,opening:c.customer.opening},complaint:c.complaint,environment:c.environment,system:c.system,difficulty:c.difficulty,tests:c.tests.map(t=>({id:t.id,label:t.label,tool:t.tool,zone:t.zone,setup:t.setup,mode:t.mode,positive:t.positive,negative:t.negative,minutes:t.minutes,cost:t.cost,safety:t.safety})),repairs:c.repairs.map(r=>({id:r.id,label:r.label,minutes:r.minutes,cost:r.cost})),learning:c.learning,referenceNotes:c.referenceNotes};}
-function baseGrade(c,events,answer,attempt){
- const done=new Set(events.filter(e=>e.type==='test').map(e=>e.id));const repairs=events.filter(e=>e.type==='repair');const applied=repairs.map(e=>c.repairs.find(r=>r.id===e.id)).filter(Boolean);const correct=applied.some(r=>r.correct===true);const verified=events.some(e=>e.type==='verify'&&e.success===true);const decisive=c.tests.filter(t=>t.decisive);const found=decisive.filter(t=>done.has(t.id)).length;
- const interview=Math.min(100,events.filter(e=>e.type==='message').length*22);
- const testing=Math.round(Math.min(100,(found/Math.max(1,decisive.length))*85+Math.min(15,done.size*2)));
- const timeMinutes=events.reduce((n,e)=>n+(e.type==='test'?Number(c.tests.find(t=>t.id===e.id)?.minutes||0):e.type==='repair'?Number(c.repairs.find(r=>r.id===e.id)?.minutes||0):0),0);
- const avoidable=applied.filter(r=>!r.correct).length;
- const safety=Math.max(0,100-avoidable*18-events.filter(e=>e.type==='unsafe').length*25);
- const reasoning=Math.max(0,Math.min(100,(correct?65:12)+(found?20:0)+(String(answer.hypothesis||'').length>=20?10:0)+(String(answer.justification||'').length>=35?5:0)));
- const communication=Math.min(100,(String(answer.customerMessage||'').length>35?65:15)+(interview*.35));
- let score=Math.round(reasoning*.3+testing*.25+safety*.15+communication*.15+(verified?100:20)*.15-avoidable*4);
- const passed=!!(correct&&verified&&found>=1&&String(answer.hypothesis||'').trim().length>4&&score>=65);
- score=Math.max(0,Math.min(100,score));return {score,passed,reasoning,testing,safety,communication:Math.round(communication),interview,verified,found,correct,timeMinutes,avoidable,secondChance:!passed&&attempt===1,attempt};
+function hypothesisMatches(c,answer){
+ const text=normalizeQuestion((answer?.hypothesis||'')+' '+(answer?.justification||''));
+ const ignored=new Set(['sistema','problema','falla','sensor','motor','pieza','tiene','mala','malo','defectuoso','defectuosa','dano','danado','danada','desgastado','desgastada','con','de','la','del','en','y','una','un','no','los','las','el','intermitente','mala','condicion']);
+ const abbreviations=new Set(['maf','map','ect','ckp','cmp','ecu','abs','can','tps','app','vvt','iac','egr']);
+ const terms=[...(Array.isArray(c.acceptedTerms)?c.acceptedTerms:[]),...normalizeQuestion(c.hiddenCause).split(' ')].map(normalizeQuestion).filter(t=>(t.length>=5||abbreviations.has(t))&&!ignored.has(t));
+ return terms.some(t=>text.includes(t)) || normalizeQuestion(answer.hypothesis||'').includes(normalizeQuestion(c.hiddenCause));
 }
+function baseGrade(c,events,answer,attempt){
+ const done=new Set(events.filter(e=>e.type==='test'&&e.success!==false).map(e=>e.id));
+ const applied=events.filter(e=>e.type==='repair').map(e=>c.repairs.find(r=>r.id===e.id)).filter(Boolean);
+ const correct=applied.some(r=>r.correct===true), verified=correct&&events.some(e=>e.type==='verify'&&e.success===true);
+ const decisive=c.tests.filter(t=>t.decisive), found=decisive.filter(t=>done.has(t.id)).length;
+ const relevantCount=c.tests.filter(t=>done.has(t.id)).length, matched=hypothesisMatches(c,answer);
+ const extra=applied.filter(r=>!r.correct).length, unsafe=events.filter(e=>e.type==='unsafe').length;
+ const interview=events.filter(e=>e.type==='message').length;
+ const justified=String(answer.justification||'').trim().length>=28;
+ const explained=String(answer.customerMessage||'').trim().length>=30;
+ const reasoning=matched?(justified&&found?100:justified?85:65):Math.min(58,justified?44:25);
+ // No se exige revisar componentes irrelevantes. Lo importante es confirmar evidencia discriminante.
+ const testing=found===0?Math.min(45,relevantCount*10):found>=decisive.length?100:Math.round(70+30*found/Math.max(1,decisive.length));
+ const safety=Math.max(0,100-25*unsafe-15*extra);
+ const communication=explained?(interview>0?100:95):55;
+ const verification=verified?100:0;
+ const score=Math.max(0,Math.min(100,Math.round(reasoning*.30+testing*.25+safety*.15+communication*.15+verification*.15)));
+ const passed=!!(correct&&verified&&found>=1&&matched&&justified&&score>=70);
+ const timeMinutes=events.reduce((n,e)=>n+(e.type==='test'?Number(c.tests.find(t=>t.id===e.id)?.minutes||BY_ID.get(e.id)?.minutes||0):e.type==='repair'?Number(c.repairs.find(r=>r.id===e.id)?.minutes||0):0),0);
+ return {score,passed,reasoning,testing,safety,communication,interview,verified,found,correct,hypothesisCorrect:matched,avoidable:extra,timeMinutes,secondChance:!passed&&attempt===1,attempt};
+}
+
 const docs={
  multimetro:{title:'Mediciones eléctricas sin adivinar',summary:'Qué medir, en qué condiciones y cómo interpretar resultados. Un solo valor rara vez confirma una avería.',steps:['Define el tipo de señal: tensión, resistencia, frecuencia o corriente.','Busca el diagrama correcto del vehículo y la identificación de terminales.','Para medir resistencia, desconecta alimentación y aísla el componente siguiendo el procedimiento del fabricante.','Para caída de tensión, mide con el circuito trabajando y compara puntos relevantes bajo carga.','Compara las lecturas con una especificación verificable del sistema, no con un valor universal.'],warnings:['No midas Ω en circuitos energizados.','No puentees pines ni pruebes componentes SRS o alto voltaje.','Una bobina COP moderna no siempre se diagnostica midiendo resistencia.'],sourceStatus:'Fundamentos generales, no cifras OEM.'},
  scanner:{title:'Datos en vivo y códigos DTC',summary:'Un DTC señala una condición detectada, no necesariamente una pieza que se debe reemplazar.',steps:['Confirma síntoma, condiciones de aparición y códigos actuales/pendientes.','Revisa datos con motor frío y caliente según corresponda.','Contrasta sensores relacionados y observa tendencias, no solo un valor aislado.','Documenta freeze frame si el equipo lo permite.','Verifica la reparación bajo las mismas condiciones iniciales.'],warnings:['Un escáner básico no tiene todas las funciones del fabricante.','No borres códigos sin registrar la evidencia previa.'],sourceStatus:'Guía didáctica de diagnóstico general.'},
@@ -86,7 +113,7 @@ const docs={
 };
 function stripText(s,max=4000){return typeof s==='string'?s.slice(0,max):'';}
 function safeHistory(history){if(!Array.isArray(history))return [];return history.slice(-14).map(h=>({role:h.role==='client'?'client':'mechanic',text:stripText(h.text,550)}));}
-function mockResponse(system,payload){if(system===CASE_SYS)return structuredClone(mockCase());if(system.includes('auditor independiente'))return {approved:true,issues:[]};if(system.includes('Eres un cliente'))return {reply:'Pucha, empezó hace unos días. No sé mucho más, pero me pasa sobre todo cuando llevo un rato andando.'};if(system.includes('Eres un profesor'))return {title:'Práctica de mediciones',summary:'Usa el diagrama antes de medir.',steps:['Identifica terminales.'],warnings:['No midas resistencia energizado.'],quiz:[{question:'¿Medir Ω con tensión?',answer:'No.'}],sourceStatus:'Fundamentos generales'};return {feedback:'Se evaluaron las pruebas, la justificación y la seguridad de tu proceso.',strengths:['Buena disposición para verificar'],improvements:['Elegir pruebas discriminantes antes de reparar'],lesson:'Confirmar el síntoma y estudiar el sistema completo.',hypothesisCorrect:true};}
+function mockResponse(system,payload){if(system===CASE_SYS)return structuredClone(mockCase());if(system.includes('auditor independiente'))return {approved:true,issues:[]};if(system.includes('PROPIETARIO chileno')||system.includes('DUEÑO CHILENO')||system.includes('Eres un cliente'))return {reply:'Pucha, empezó hace unos días. No sé mucho más, pero me pasa sobre todo cuando llevo un rato andando.'};if(system.includes('Eres un profesor'))return {title:'Práctica de mediciones',summary:'Usa el diagrama antes de medir.',steps:['Identifica terminales.'],warnings:['No midas resistencia energizado.'],quiz:[{question:'¿Medir Ω con tensión?',answer:'No.'}],sourceStatus:'Fundamentos generales'};return {feedback:'Se evaluaron las pruebas, la justificación y la seguridad de tu proceso.',strengths:['Buena disposición para verificar'],improvements:['Elegir pruebas discriminantes antes de reparar'],lesson:'Confirmar el síntoma y estudiar el sistema completo.',hypothesisCorrect:true};}
 function mockCase(){return {vehicle:{brand:'Toyota',model:'Yaris',year:2009,engine:'1.5 gasolina',kilometers:176000,color:'rojo',bodyType:'hatchback'},customer:{name:'Camila',personality:'Cercana y práctica',opening:'Hola, mi Yaris está temblando y a veces se apaga al parar. ¿Lo podrá revisar?',knowledge:'No sabe términos de mecánica',history:'No recuerda última limpieza del cuerpo',answers:['El problema ocurre en caliente','No observa testigo motor']},title:'Ralentí que cae al detenerse',complaint:'Motor vibra y se cala al parar',environment:'En caliente, con accesorios conectados',system:'Admisión y ralentí',difficulty:'Inicial',hiddenCause:'Suciedad severa del cuerpo de aceleración',technicalReason:'Caudal mínimo alterado, verificado con inspección y comportamiento al ralentí',confirmation:'Limpieza, reaprendizaje cuando corresponda y prueba estable',tests:[{id:'t1',label:'Inspección de admisión',tool:'visual',zone:'engine',setup:'Motor apagado',mode:'N/A',positive:'N/A',negative:'N/A',result:'Acumulación importante de depósitos en mariposa',reading:'Depósitos visibles',significance:'Evidencia directa',decisive:true,minutes:7,cost:0,safety:'Motor apagado'},{id:'t2',label:'Escáner ralentí',tool:'scanner',zone:'cabin',setup:'Motor en ralentí caliente',mode:'N/A',positive:'N/A',negative:'N/A',result:'Ralentí inestable sin DTC actuales',reading:'640–920 rpm (simulado)',significance:'Confirma queja',decisive:true,minutes:8,cost:0,safety:'Vehículo inmovilizado'},{id:'t3',label:'Tensión batería',tool:'multimeter',zone:'electrical',setup:'Motor encendido, medir en bornes',mode:'DCV',positive:'Batería +',negative:'Batería -',result:'Sistema de carga dentro de rango para este caso',reading:'14.1 V (simulado)',significance:'Reduce sospecha de baja tensión',decisive:false,minutes:6,cost:0,safety:'No juntar puntas'},{id:'t4',label:'Revisión de mangueras',tool:'visual',zone:'engine',setup:'Motor apagado',mode:'N/A',positive:'N/A',negative:'N/A',result:'Sin grietas visibles',reading:'Inspección sin anomalías visibles',significance:'No descarta fugas pequeñas',decisive:false,minutes:5,cost:0,safety:'Inspección en frío'},{id:'t5',label:'Revisión de filtro',tool:'visual',zone:'engine',setup:'Motor apagado',mode:'N/A',positive:'N/A',negative:'N/A',result:'Filtro sin obstrucción apreciable',reading:'Sin obstrucción visible',significance:'Descarta restricción importante',decisive:false,minutes:4,cost:0,safety:'Motor apagado'},{id:'t6',label:'Correcciones combustible',tool:'scanner',zone:'cabin',setup:'Motor caliente estable',mode:'N/A',positive:'N/A',negative:'N/A',result:'Correcciones levemente positivas',reading:'STFT +6%; LTFT +4% (simulados)',significance:'No sugiere una fuga mayor',decisive:false,minutes:6,cost:0,safety:'No distraerse del motor'},{id:'t7',label:'Inspección poleas',tool:'mechanical',zone:'front',setup:'Motor apagado',mode:'N/A',positive:'N/A',negative:'N/A',result:'Sin anomalías evidentes',reading:'Sin hallazgos',significance:'Poco discriminante',decisive:false,minutes:8,cost:0,safety:'No acercar manos con motor en marcha'},{id:'t8',label:'Voltaje de alimentación',tool:'multimeter',zone:'electrical',setup:'Contacto ON y procedimiento seguro',mode:'DCV',positive:'Terminal de alimentación',negative:'Masa de batería',result:'Alimentación presente',reading:'12.2 V (simulado)',significance:'Alimentación correcta',decisive:false,minutes:7,cost:0,safety:'Evita cortocircuitos'}],repairs:[{id:'r1',label:'Limpieza y aprendizaje del cuerpo de aceleración',correct:true,minutes:35,cost:18000,outcome:'Ralentí estabilizado bajo las condiciones simuladas'},{id:'r2',label:'Reemplazar batería',correct:false,minutes:30,cost:80000,outcome:'Síntoma persiste; se incurrió en un gasto innecesario'},{id:'r3',label:'Reemplazar sensor ECT',correct:false,minutes:40,cost:45000,outcome:'Síntoma persiste'},{id:'r4',label:'Cambiar bujías',correct:false,minutes:40,cost:50000,outcome:'Síntoma persiste'}],learning:['Ralentí electrónico','Lectura de DTC','Análisis de admisión'],referenceNotes:['Este caso usa mediciones simuladas. No sustituye datos OEM.']};}
 const server=http.createServer(async(req,res)=>{
  try{
@@ -111,12 +138,13 @@ const server=http.createServer(async(req,res)=>{
   if(url.pathname==='/api/case'){
    const hist=Array.isArray(d.history)?d.history.slice(-12).map(h=>({vehicle:stripText(h.vehicle,80),system:stripText(h.system,60),cause:stripText(h.cause,100),score:Math.min(100,Number(h.score)||0)})):[];
    const onlyLocal=d.mode==='local'||FORCE_LOCAL||(!GEMINI_API_KEY&&!MOCK);
+   const recentLocal=Array.isArray(d.recent)?d.recent.slice(-20).map(x=>({vehicle:stripText(x.vehicle,100)})):[];const localHistory=[...hist,...recentLocal];
    let c, notice='';
-   if(onlyLocal){c=chooseLocalCase(hist);notice=FORCE_LOCAL?'Modo local solicitado en Render.':d.mode==='local'?'Elegiste generar un caso de práctica local.':'Gemini no está configurado; se cargó una práctica local para que puedas continuar.';}
+   if(onlyLocal){c=chooseLocalCase(localHistory);notice=FORCE_LOCAL?'Modo local solicitado en Render.':d.mode==='local'?'Elegiste generar un caso de práctica local.':'Gemini no está configurado; se cargó una práctica local para que puedas continuar.';}
    else{
     const level=hist.length===0?'Evaluación inicial':hist.slice(-4).every(h=>h.score>=80)?'Avanzar dificultad':'Progresión gradual según resultados';
     try{
-     const directive={task:'generar caso',level,history:hist,nonce:crypto.randomBytes(6).toString('hex'),note:'Varía aleatoriamente vehículo, cliente, fallo y condiciones.'};
+     const directive={task:'generar caso de diagnóstico nuevo, independiente y coherente',level,history:hist,recentGenerations:Array.isArray(d.recent)?d.recent.slice(-16).map(x=>({title:stripText(x.title,90),vehicle:stripText(x.vehicle,85),system:stripText(x.system,60)})):[],learnedIntents:Array.isArray(d.learnedIntents)?d.learnedIntents.slice(0,14).map(x=>stripText(x,50)):[],nonce:crypto.randomBytes(9).toString('hex'),note:'Crea una combinación NUEVA de vehículo, cliente masculino, falla, síntomas, evidencias y pruebas. Respeta formato JSON y reglas de seguridad. Una llamada de Gemini por caso.'};
      c=validateCase(await gemini(CASE_SYS,directive,caseSchema,'medium'));
      c.origin='ai';
      // Una sola llamada por caso por defecto. Validación local obligatoria; auditor opcional.
@@ -126,7 +154,7 @@ const server=http.createServer(async(req,res)=>{
      }
     }catch(ex){
       console.warn('Generación IA falló; se habilitó modo local:',ex.message);
-      c=chooseLocalCase(hist);
+      c=chooseLocalCase(localHistory);
       notice='Gemini no pudo generar el caso ('+String(ex.message).slice(0,140)+'). Se abrió una práctica local, sin perder tu sesión.';
     }
    }
@@ -134,53 +162,58 @@ const server=http.createServer(async(req,res)=>{
    return send(res,200,{case:publicCase(c),session:seal(c),mode:c.origin==='local'?'local':'ai',notice});
   }
   if(url.pathname==='/api/chat'){
-   const c=unseal(d.session);const message=stripText(d.message,800).trim();if(!message)return error(res,400,'Escribe una pregunta para el cliente.');
+   const c=unseal(d.session),message=stripText(d.message,800).trim();if(!message)return error(res,400,'Escribe una pregunta para el cliente.');
+   const past=safeHistory(d.history),norm=normalizeQuestion(message);
+   for(let i=past.length-2;i>=0;i--){if(past[i].role==='mechanic'&&normalizeQuestion(past[i].text)===norm&&past[i+1]?.role==='client')return send(res,200,{reply:past[i+1].text,source:'memory',reused:true});}
    const profile={name:c.customer.name,personality:c.customer.personality,opening:c.customer.opening,knowledge:c.customer.knowledge,history:c.customer.history,answers:c.customer.answers,complaint:c.complaint,environment:c.environment,vehicle:c.vehicle};
-   const system=CORE+'\nEres un cliente CHILENO, persona humana informal natural, no un instructor. Responde de 1 a 3 frases, con variación realista. Solo sabes tu perfil y antecedentes de propietario, no sabes la causa, resultados ni intervención. Si no puedes conocer algo, di que no sabes o no te fijaste. No inventes información incompatible con el perfil. No entregues diagnósticos ni preguntes como robot. No reveles que eres IA ni describes el caso como simulación. Devuelve reply.';
+   const intent=questionIntent(message);
+   const known=new Set(['mileage','vehicle','since','frequency','temperature','warnings','maintenance','cost','appointment','diagnosis','conditions','start','fuel','noise','smell','power']);
+   // Preguntas habituales se contestan con hechos del caso, sin gastar cuota. Una pregunta nueva o compleja va a Gemini.
+   if(known.has(intent)&&!d.forceAI){const reply=offlineClientReply(c,message,past);return send(res,200,{reply,source:'case-memory',intent});}
    let reply,source='ai';
-   if(c.origin==='local'||FORCE_LOCAL||(!GEMINI_API_KEY&&!MOCK)){reply=offlineClientReply(c,message);source='local';}
-   else {try{const result=await gemini(system+'\nEres un cliente del taller.',{profile,history:safeHistory(d.history),question:message},chatSchema,'low');reply=stripText(result.reply,900)||'No sabría decirle, la verdad.';}
-   catch(ex){console.warn('Chat IA degradado a local:',ex.message);reply=offlineClientReply(c,message);source='local';}}
-   return send(res,200,{reply,source});
+   if(FORCE_LOCAL||(!GEMINI_API_KEY&&!MOCK)){reply=offlineClientReply(c,message,past);source='local';}
+   else{
+    const system=CORE+'\nActúa como el DUEÑO CHILENO (hombre) de este auto, en un chat natural. Contesta la ÚLTIMA PREGUNTA concreta primero. Revisa el historial completo, responde distinto a preguntas diferentes, con 1 a 3 frases, como una persona real, sin sonar a bot. Solo conoces lo que el propietario observó, no sabes la causa técnica, ni mediciones de taller. No inventes detalles ni repitas la misma respuesta. Si desconoces un dato, dilo como hombre chileno, cordial y natural. No reveles ninguna información oculta del caso. JSON reply.';
+    try{const result=await gemini(system,{profile,history:past,lastQuestion:message,questionIntent:intent,knownFacts:c.customer.answers},chatSchema,'low');reply=stripText(result.reply,900);if(!reply)throw new Error('Respuesta vacía');}
+    catch(ex){console.warn('Chat IA indisponible:',ex.message);reply=offlineClientReply(c,message,past);source='local';}
+   }
+   return send(res,200,{reply,source,intent});
   }
   if(url.pathname==='/api/test'){
-   const c=unseal(d.session),t=c.tests.find(x=>x.id===d.id);if(!t)return error(res,404,'Prueba no encontrada.');
+   const c=unseal(d.session),t=c.tests.find(x=>x.id===d.id)||BY_ID.get(d.id);if(!t)return error(res,404,'Prueba no encontrada.');
    if(t.tool==='multimeter'){
     const correct=String(d.mode||'').toUpperCase()===String(t.mode||'').toUpperCase()&&String(d.positive||'')===String(t.positive)&&String(d.negative||'')===String(t.negative);
     if(!correct)return send(res,200,{connected:false,reading:'—',result:'La medición no es válida con esa escala o conexión. Revisa el procedimiento, los puntos y las condiciones antes de interpretar un valor.',safety:t.safety,setup:t.setup});
    }
-   return send(res,200,{connected:true,reading:t.reading,result:t.result,significance:t.significance,safety:t.safety,setup:t.setup});
+   return send(res,200,{connected:true,generic:t.kind==='catalog',reading:t.kind==='catalog'?'Comprobación orientativa · sin anomalía confirmada':t.reading,result:t.kind==='catalog'?'Se realizó una revisión general de '+t.componentName+'. No se obtuvo una evidencia concluyente sobre la falla de este caso. Revisa las pruebas específicas y los datos técnicos del vehículo.':t.result,significance:t.significance,safety:t.safety,setup:t.setup});
   }
   if(url.pathname==='/api/repair'){
    const c=unseal(d.session),r=c.repairs.find(x=>x.id===d.id);if(!r)return error(res,404,'Reparación no encontrada.');
    return send(res,200,{result:r.outcome,improved:!!r.correct,minutes:r.minutes,cost:r.cost});
   }
   if(url.pathname==='/api/evaluate'){
-   const c=unseal(d.session),events=Array.isArray(d.events)?d.events.slice(0,150).map(e=>({type:String(e.type||'').slice(0,25),id:String(e.id||'').slice(0,80),success:e.success===true})):[];
-   const attempt=d.attempt===2?2:1;const answer={hypothesis:stripText(d.answer?.hypothesis,600),justification:stripText(d.answer?.justification,900),customerMessage:stripText(d.answer?.customerMessage,800)};
+   const c=unseal(d.session),events=Array.isArray(d.events)?d.events.slice(0,350).map(e=>({type:String(e.type||'').slice(0,25),id:String(e.id||'').slice(0,120),success:e.success!==false})):[];
+   const attempt=d.attempt===2?2:1,answer={hypothesis:stripText(d.answer?.hypothesis,600),justification:stripText(d.answer?.justification,900),customerMessage:stripText(d.answer?.customerMessage,800)};
    const grade=baseGrade(c,events,answer,attempt);
-   const normalized=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,' ');
-   const stop=new Set(['para','como','este','esta','del','los','las','con','por','una','unos','sus','que','de','la','el','en','se','falla','sistema','sensor','defectuoso','problema','causa','averia','motor','intermitente']);
-   const tokens=normalized(c.hiddenCause).split(/\s+/).filter(w=>w.length>=4&&!stop.has(w));
-   const answerText=normalized(answer.hypothesis+' '+answer.justification);
-   const keywords=tokens.filter(w=>answerText.includes(w));
-   const accepted=(Array.isArray(c.acceptedTerms)?c.acceptedTerms:[]).some(term=>answerText.includes(normalized(term)));
-   const heuristicMatch=accepted || keywords.length>=Math.min(2,Math.max(1,tokens.length)) || (tokens.length===1&&keywords.length===1);
-
-   let review;
-   if(c.origin==='local'||FORCE_LOCAL||(!GEMINI_API_KEY&&!MOCK)){
-     review={feedback:grade.passed?'Reuniste evidencia, reparaste y verificaste la condición simulada.':'La evidencia o la intervención no permite confirmar completamente el diagnóstico.',strengths:grade.found?['Incluiste pruebas que discriminan la falla']:['Registraste tu razonamiento inicial'],improvements:['Explica por qué tus mediciones descartan otras causas','Incluye siempre una verificación en la misma condición del síntoma'],lesson:'Compara la hipótesis con las pruebas, evita reemplazos por intuición y verifica el resultado.',hypothesisCorrect:heuristicMatch};
-   }else{
-     try{review=await gemini(CORE+'\nEres instructor técnico. No cambies el puntaje ni el resultado calculado por el motor; solo redacta retroalimentación pedagógica concreta. Si secondChance=true NO menciones causa, reparación correcta ni pruebas precisas que resuelvan el caso. Si es segundo intento o aprobado, explica la causa y comprobaciones. Acepta rutas alternativas válidas. Determina si la causa escrita por el alumno corresponde realmente al fallo oculto, en hypothesisCorrect (boolean). No basta que haya aplicado la pieza correcta al azar. Responde feedback, strengths, improvements, lesson, hypothesisCorrect.',{case:c,events,answer,grade},reviewSchema,'medium');}
-     catch(e){console.warn('Retroalimentación IA no disponible:',e.message);review={feedback:grade.passed?'Reuniste evidencia y verificaste tu intervención.':'La evidencia reunida no fue suficiente para confirmar la reparación.',strengths:grade.found?['Realizaste al menos una prueba discriminante']:['Registraste tu razonamiento'],improvements:['Contrasta hipótesis con mediciones y condiciones de falla'],lesson:'Prioriza la comprobación antes del reemplazo.',hypothesisCorrect:undefined};}
-   }
-   if(review.hypothesisCorrect===false || (review.hypothesisCorrect===undefined && !heuristicMatch)){
-     grade.passed=false;grade.score=Math.min(grade.score,59);grade.secondChance=attempt===1;
-   }
-   grade.hypothesisAssessment=review.hypothesisCorrect===undefined?'orientativa (sin revisión de IA)':'revisada por IA';
-   if(grade.secondChance){review={feedback:'El diagnóstico todavía no tiene evidencia suficiente o la causa propuesta no está bien fundamentada. Puedes seguir investigando sin revelar la solución.',strengths:grade.found?['Realizaste pruebas relacionadas con el síntoma']:['Planteaste una hipótesis que puedes contrastar'],improvements:['Comprueba qué resultado distinguiría las posibles causas.','Revisa la coherencia entre el síntoma, tus mediciones y la intervención elegida.'],lesson:'La segunda oportunidad está abierta; intenta demostrar la causa con evidencia adicional.'};}
-   if(grade.secondChance)return send(res,200,{...grade,reveal:'',review});
-   return send(res,200,{...grade,reveal:c.hiddenCause,technicalReason:c.technicalReason,confirmation:c.confirmation,review,system:c.system,vehicle:c.vehicle,learning:c.learning});
+   // Determinista. Nunca se vuelve a consultar a Gemini al reabrir o reenviar la misma evaluación.
+   const review=grade.secondChance?{
+     feedback:'Aún faltan elementos para confirmar la causa. Puedes seguir investigando: la solución se mantiene oculta.',
+     strengths:grade.found?['Ya registraste al menos una prueba útil.']:['Empezaste a analizar posibles causas.'],
+     improvements:['Confirma que tu hipótesis explique las mediciones, no solo los síntomas.','Realiza una prueba discriminante y verifica el resultado de la intervención.'],
+     lesson:'Segunda oportunidad: recopila evidencia adicional y vuelve a fundamentar tu diagnóstico.'
+   }: grade.passed?{
+     feedback:`Causa identificada y reparación verificada. Encontraste ${grade.found} prueba(s) discriminante(s) y fundamentaste la intervención.`,
+     strengths:['Identificaste correctamente la causa con evidencia.','Verificaste la reparación en las condiciones del caso.'],
+     improvements:grade.avoidable?['Evita intervenir piezas que no has descartado con pruebas.']:['Continúa con el mismo método de comprobación antes de reemplazar piezas.'],
+     lesson:'Diagnóstico correcto: documenta condiciones, resultados y verificación final.'
+   }:{
+     feedback:'El caso se cerró sin confirmar completamente la falla.',
+     strengths:grade.found?['Reuniste evidencia para orientar el diagnóstico.']:['Registraste un intento y una hipótesis.'],
+     improvements:['Contrasta la causa con las pruebas específicas.','Verifica la reparación y fundamenta el informe.'],
+     lesson:'Estudia la causa real y comprueba qué pruebas permitían distinguirla de otras averías.'
+   };
+   if(grade.secondChance)return send(res,200,{...grade,reveal:'',review,hypothesisAssessment:'regla técnica determinista'});
+   return send(res,200,{...grade,reveal:c.hiddenCause,technicalReason:c.technicalReason,confirmation:c.confirmation,review,system:c.system,vehicle:c.vehicle,learning:c.learning,hypothesisAssessment:'regla técnica determinista'});
   }
   if(url.pathname==='/api/study'){
    const key=String(d.topic||'diagnostico').slice(0,60).toLowerCase();const guide=docs[key];if(guide)return send(res,200,{guide});

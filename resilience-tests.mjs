@@ -23,14 +23,14 @@ async function post(route,data={},code='local-test-code'){
  return {status:r.status,data:await r.json()};
 }
 test('GET health/version and protected API access',async()=>{
- const r=await fetch(base+'/api/status');const d=await r.json();assert.equal(d.version,'2.1.0');assert.equal(d.localAvailable,true);
+ const r=await fetch(base+'/api/status');const d=await r.json();assert.equal(d.version,'2.4.0');assert.equal(d.localAvailable,true);
  const bad=await post('/api/ping',{},'mal');assert.equal(bad.status,401);
  const ok=await post('/api/ping');assert.equal(ok.status,200);assert.equal(ok.data.auth,true);
 });
 test('Gemini 429 triggers a ready-to-use local case instead of an error',async()=>{
  const r=await post('/api/case',{history:[]});assert.equal(r.status,200,JSON.stringify(r.data));assert.equal(r.data.mode,'local');assert.ok(/Gemini/i.test(r.data.notice));assert.ok(r.data.case.tests.length>=6);assert.equal(r.data.case.origin,'local');assert.ok(blockedRequests>=1);
  const secret=unseal(r.data.session);assert.ok(secret.hiddenCause);assert.ok(!JSON.stringify(r.data.case).includes(secret.hiddenCause));
- const chat=await post('/api/chat',{session:r.data.session,message:'¿Cuándo empezó?',history:[]});assert.equal(chat.status,200);assert.equal(chat.data.source,'local');assert.ok(chat.data.reply.length>10);
+ const chat=await post('/api/chat',{session:r.data.session,message:'¿Cuándo empezó?',history:[]});assert.equal(chat.status,200);assert.equal(chat.data.source,'case-memory');assert.ok(chat.data.reply.length>10);
  const t=r.data.case.tests[0];const a=await post('/api/test',{session:r.data.session,id:t.id});const b=await post('/api/test',{session:r.data.session,id:t.id});assert.equal(a.status,200);assert.deepEqual(a.data,b.data);
 });
 test('Local mode does not call Gemini and cases vary without app updates',async()=>{

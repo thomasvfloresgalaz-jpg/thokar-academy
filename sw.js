@@ -1,4 +1,4 @@
-const CACHE='thokar-academy-v21-static-20261108';const files=['/','/index.html','/style.css','/app.js','/workshop3d.js','/manifest.webmanifest','/icon.svg'];
+const CACHE='thokar-academy-v24-static-20261108';const files=['/','/index.html','/style.css','/app.js','/workshop3d.js','/catalog.js','/memory.js','/manifest.webmanifest','/icon.svg'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(files)).then(()=>self.skipWaiting()))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
 self.addEventListener('fetch',e=>{const u=new URL(e.request.url);if(e.request.method!=='GET'||u.origin!==location.origin||u.pathname.startsWith('/api/')||u.pathname==='/healthz')return;e.respondWith(fetch(e.request).then(r=>{if(r.ok){const copy=r.clone();caches.open(CACHE).then(c=>c.put(e.request,copy))}return r}).catch(()=>caches.match(e.request).then(r=>r||caches.match('/index.html'))))});

@@ -1,96 +1,46 @@
-# THOKAR Academy 2.1 — Corrección de generación y conexión Gemini
+# THOKAR ACADEMY 2.4 · Rediseño y memoria (GitHub + Render)
 
-Versión corregida para **GitHub + Render**, preparada para Android como PWA. Los **13 archivos del ZIP van directamente en la raíz** del repositorio. No hay carpetas que subir. No contiene contraseñas ni claves de Gemini.
+Versión 2.4.0 del entrenador de diagnóstico automotriz. **Todos los archivos se suben sueltos a la raíz del repositorio**, sin carpetas adicionales.
 
-## Qué se corrigió
+## Actualizar desde una versión anterior
 
-- El botón **Generar caso** ahora cambia inmediatamente al Taller y muestra que está preparando el diagnóstico, en vez de quedar sin respuesta en Inicio.
-- Si Gemini devuelve **429 (cuota)**, **403 (acceso)**, un caso incompleto, demora demasiado o no hay API configurada, el servidor prepara un **caso local de entrenamiento** y explica por qué. La generación ya no queda bloqueada por Gemini. Si Render está caído o el código de acceso es incorrecto, la aplicación muestra un mensaje accionable; en ese caso no puede solicitar casos al servidor.
-- Se agregó **Practicar sin Gemini (modo local)** para generar inmediatamente un caso sin consumir cuota de Google. No necesita cambiar GitHub para alternar modos.
-- Se comprobó que las mediciones de cada caso son fijas, que la causa oculta no se envía al cliente y que el instructor permite una segunda oportunidad sin revelarla.
-- La creación de un caso con IA usa **una consulta** por defecto, en lugar de crear el caso y solicitar una segunda auditoría automáticamente. Esto reduce la cuota consumida. La validación estructural de casos sigue activa; el auditor IA adicional es opcional.
-- El botón **Ajustes → Comprobar acceso** valida realmente el código con Render. **Ajustes → Probar Gemini** realiza una consulta pequeña real y muestra si hay cuota / problemas de modelo.
-- Si el cliente simulado depende de Gemini pero la conexión falla después, se activan respuestas de respaldo (informando del cambio). Las pruebas y reparaciones no dependen de que Gemini responda en cada acción.
-- Se renovó el caché de la PWA para facilitar la actualización sobre la versión anterior.
-- Se mantiene el almacenamiento anterior (`thokar-academy-v2-state`) y su sistema de respaldo; no borres los datos del navegador.
+1. Antes de actualizar, en la aplicación anterior entra a **Ajustes → Exportar respaldo** y guarda el JSON si puedes.
+2. Descomprime el ZIP y sube **todos** los archivos de su interior a la raíz del mismo repositorio de GitHub, sustituyendo archivos homónimos. No crees subcarpetas.
+3. En Render, conecta el repositorio al **Web Service** Node existente y despliega el último commit. Configuración: `Build Command: npm install`, `Start Command: npm start`, Node >= 20.
+4. En **Environment**, conserva las variables existentes:
+   - `ACADEMY_ACCESS_CODE`: código privado para entrar a la aplicación.
+   - `ACADEMY_SECRET`: frase aleatoria larga, estable, utilizada para cifrar los casos. **No la cambies si tienes casos guardados.**
+   - `GEMINI_API_KEY`: tu clave de Google AI Studio para Gemini (opcional: sin ella funcionan casos locales).
+   - `GEMINI_MODEL`: `gemini-3.8-flash` o un modelo admitido por tu cuota/proyecto.
+   - `ACADEMY_LOCAL_ONLY`: `1` solo si quieres forzar práctica local y evitar consumo de Gemini.
+5. Abre la misma URL en Android, cierra la pestaña anterior, vuelve a abrirla y recarga si todavía aparece la interfaz antigua. No borres los datos del sitio: la memoria y los casos se guardan localmente.
+6. En **Ajustes** ingresa el código `ACADEMY_ACCESS_CODE` y utiliza **Comprobar acceso** o **Probar Gemini** antes de solicitar un caso nuevo.
 
-## Primeros pasos: actualizar GitHub
+## Qué cambió
 
-1. Haz un respaldo JSON de tu progreso en la aplicación anterior, si puedes abrir Ajustes.
-2. Descarga el ZIP, **descomprímelo** y selecciona los **13 archivos**.
-3. Abre tu repositorio de GitHub y ve a **Add file → Upload files**.
-4. Sube los 13 archivos **directamente a la raíz** del repositorio. Reemplaza los anteriores y realiza **Commit changes**.
-5. En Render, abre tu **Web Service**, revisa que esté conectado al repositorio y ejecuta **Manual Deploy → Deploy latest commit** si no despliega automáticamente.
-6. No crees carpetas adicionales, no subas el ZIP sin descomprimir y **no borres** el repositorio anterior.
+- **Navegación y taller:** barra inferior con íconos SVG nuevos y transiciones; escena con cámara suavizada, controles táctiles simplificados y puntos de inspección discretos (ya no hay números sobre las piezas).
+- **Catálogo abierto:** entra por **sistema → componente → comprobación**. No hay lista cerrada de las pruebas que conviene hacer para la falla. Las pruebas del caso aparecen integradas junto a un catálogo general de métodos. Puedes elegir independientemente.
+- **Mediciones:** se elige escala, punta positiva y negativa. Después de **cinco conexiones o escalas incorrectas del mismo componente**, aparece una guía técnica de cómo medir sin revelar la avería oculta.
+- **Clientes:** personajes masculinos y expresiones chilenas; el chat responde según el tema de la pregunta. Si la IA no está disponible, hay respuestas locales distintas para kilometraje, arranque, mantenciones, testigos, condiciones de la falla, etc.
+- **Memoria local:** detecta temas de preguntas y conserva ejemplos y respuestas del **mismo caso** para reducir consultas repetidas. En un caso diferente NO recicla antecedentes personales de otro cliente. Usa temas aprendidos para variar los próximos casos de Gemini.
+- **Casos nuevos:** cada pulsación envía una solicitud nueva a Gemini con una plantilla y contexto de diversidad; si hay un error de cuota o red, ofrece casos locales para continuar. Los casos locales no son infinitos; las variaciones por IA requieren acceso y cuota.
+- **Evaluación estable:** la nota se calcula con criterios deterministas, y volver a consultar sin nuevas acciones conserva la evaluación; se puede obtener 100/100. La segunda oportunidad respeta el diagnóstico oculto.
+- **Resultados:** pantalla de informe con explicación de evidencia, verificación y mejoras.
 
-### Configuración de Render
+## Diferencias importantes entre pruebas del caso y catálogo general
 
-| Variable | Valor | Uso |
-|---|---|---|
-| `ACADEMY_ACCESS_CODE` | Código privado que tú eliges | **Obligatoria** para proteger el servidor. Es el código que se introduce en Ajustes de la app. |
-| `ACADEMY_SECRET` | Cadena privada larga, estable | **Muy recomendada** para poder reabrir tus casos. No cambies su valor después. |
-| `GEMINI_API_KEY` | Clave de Google AI Studio | Opcional para casos locales; necesaria para los casos y conversaciones con IA. |
-| `GEMINI_MODEL` | `gemini-3.8-flash` | Opcional. Debes tener cuota para el modelo elegido. |
-| `CASE_AUDIT` | `0` o sin definir | No realiza una segunda consulta IA por caso. Si lo estableces en `1`, habrá una auditoría IA adicional que consume cuota. |
-| `ACADEMY_LOCAL_ONLY` | `1` para forzar modo local | Opcional, útil si quieres evitar totalmente llamadas a Gemini. |
+Las mediciones de los **casos** son simulaciones didácticas, no especificaciones OEM certificadas. Las comprobaciones **generales** indican cómo abordar un componente, pero no implican que la falla de ese caso esté ahí ni inventan un voltaje o resistencia específico de fabricante. Consulta siempre manual técnico y condiciones exactas antes de medir vehículos reales. No utilices una simulación como dato de reparación.
 
-Render: **Runtime Node**, **Build Command `npm install`**, **Start Command `npm start`**, **Root Directory vacío**.
+El taller visual utiliza una carrocería 3D **procedimental genérica**; no es un modelo digital exacto del vehículo indicado por el cliente. Las comprobaciones del catálogo no convierten por sí solas la carrocería en un motor desmontable completo.
 
-La aplicación usa la [API Interactions de Gemini](https://ai.google.dev/gemini-api/docs/interactions-overview), modelo predeterminado `gemini-3.8-flash`. El código de la app utiliza `response_format` con salida JSON estructurada y `store: false`. Cambiar el modelo **no soluciona por sí solo** una cuota de Google agotada o igual a cero; revisa la disponibilidad real en [AI Studio → Rate Limits](https://aistudio.google.com/rate-limit).
+## Protección de la clave y privacidad
 
-## Cómo comprobar la instalación desde el teléfono
+Nunca coloques `GEMINI_API_KEY` en el HTML, JavaScript del navegador, el repositorio público ni una captura. La clave se guarda **solo en Render**. El código de acceso es distinto de la clave API. Se recomienda un `ACADEMY_SECRET` largo y permanente. El progreso se guarda en el dispositivo/navegador; respáldalo desde **Ajustes → Exportar respaldo**, especialmente antes de cambiar de dominio o navegador.
 
-1. Abre tu URL de Render, por ejemplo `https://tu-servicio.onrender.com/`.
-2. En **Ajustes**, escribe `ACADEMY_ACCESS_CODE` exactamente como aparece en Render. **No pegues `GEMINI_API_KEY` aquí.** Guarda.
-3. Abre Ajustes de nuevo y pulsa **Comprobar acceso**. Debe indicar que el servidor responde y el código es correcto.
-4. Pulsa **Probar Gemini** para una prueba real de la API (esta prueba consume una llamada).
-5. Pulsa **Generar nuevo diagnóstico**. La pantalla cambiará a Taller mientras se prepara.
-6. Si Google rechaza la llamada, verás un aviso de **práctica local** y podrás seguir con el caso. También puedes elegir directamente **Practicar sin Gemini**.
+## Diagnóstico si Gemini falla
 
-### Qué significa el modo local
+En **Ajustes → Probar Gemini** puedes verificar si el modelo responde. Un error **429** es de cuota de Google, no significa que los archivos de Render estén dañados. Verifica cuotas del proyecto en https://aistudio.google.com/rate-limit y prueba un modelo realmente habilitado para tu proyecto. La práctica local está disponible incluso sin Gemini.
 
-El servidor tiene **cinco escenarios de respaldo revisados** (Nissan Qashqai, Hyundai Accent, Chevrolet Sail, Suzuki Swift y Peugeot 3008) con variaciones de nombre del cliente y kilometraje. Los mismos escenarios pueden volver a aparecer; no son generación ilimitada mediante IA. La generación verdaderamente abierta de combinaciones nuevas utiliza Gemini **cuando tu cuota lo permite**. Los escenarios locales identifican sus mediciones como didácticas y no como datos OEM verificados.
+## Comprobación de código
 
-El modo local **no consume Gemini**, pero sí requiere que tu **servidor Render esté accesible** y que tengas el código de acceso correcto. No es un sistema completamente desconectado de internet.
-
-### Errores y soluciones
-
-- **Se queda en Inicio:** comprueba que GitHub y Render estén usando los archivos de la versión 2.1. En `https://tu-servicio.onrender.com/api/status` debe aparecer `"version":"2.1.0"`.
-- **Error 401:** código incorrecto; escribe el valor de `ACADEMY_ACCESS_CODE` en Ajustes.
-- **Error 503 por código sin configurar:** añade `ACADEMY_ACCESS_CODE` en Environment de Render y vuelve a desplegar.
-- **Gemini 429 / cuota:** funciona en modo local. Para generar casos por IA debes corregir los límites en AI Studio; la aplicación no puede aumentar la cuota.
-- **Clave 403 o modelo no disponible:** comprueba `GEMINI_API_KEY` y el modelo elegido en tu proyecto.
-- **Render duerme en el plan gratuito:** abre el enlace y espera a que responda el servicio. Si está caído, la app no puede solicitar casos.
-- **Una sesión antigua dejó de abrir:** revisa que no hayas cambiado `ACADEMY_SECRET` (o la clave API utilizada anteriormente como secreto implícito).
-- **Se ve código o interfaz antiguos:** recarga la app después del despliegue, cierra y vuelve a abrir Chrome. La versión actual trae un nuevo identificador de caché. No borres datos del sitio sin respaldo.
-
-## Pruebas realizadas
-
-Ejecuta `npm test` localmente (Node >= 20). El paquete incluye pruebas de:
-
-- API y código de acceso (correcto/incorrecto).
-- Generación de casos simulada con Gemini.
-- **Fallos de Gemini 429 simulados**: generación de caso local y conversaciones de respaldo.
-- Casos locales diferentes sin actualización de archivos.
-- Cifrado y separación de la causa oculta.
-- Mediciones reproducibles y pruebas de multímetro.
-- Reparaciones, verificación, informe y segunda oportunidad.
-- Evaluación de hipótesis y contenidos mínimos de la interfaz.
-
-**Alcances de la verificación:** las pruebas automatizadas pasaron, pero **no se ha podido probar una clave Gemini real** ni completar una prueba visual en un Android real desde este entorno. Gemini puede seguir devolviendo 429 si tu proyecto no tiene cuota; en ese caso se ofrece el modo local. Los modelos 3D siguen siendo representaciones genéricas y la precisión técnica de los casos IA debe tratarse como didáctica, no como documentación de fabricante.
-
-## Estructura plana del ZIP
-
-- `index.html`
-- `style.css`
-- `app.js`
-- `workshop3d.js`
-- `server.js`
-- `offline-cases.js`
-- `package.json`
-- `manifest.webmanifest`
-- `sw.js`
-- `icon.svg`
-- `README.md`
-- `tests.mjs`
-- `resilience-tests.mjs`
+Desde un entorno Node 20+ con los archivos del repositorio: `npm test` ejecuta pruebas de servidor y regresión: autorización, generación, caída de Gemini, memoria, catálogo, chat, mediciones y nota reproducible. Las pruebas no requieren tu clave API, pues simulan los servicios externos. **No sustituyen una prueba real con Gemini ni una validación de datos OEM por fabricante.**

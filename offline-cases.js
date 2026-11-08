@@ -92,13 +92,14 @@ const cases=[
  'Comprobar fijaciones y verificar el ruido en condiciones seguras después de intervenir.',
  ['Diagnóstico de ruido','Inspección por descarte','No sustituir amortiguadores por intuición'])
 ];
-const names=['Camila','Matías','Daniela','Ignacio','Fernanda','César','Constanza','Alejandro','Carolina','Rodrigo'];
+const names=['Matías','Ignacio','César','Alejandro','Rodrigo','Sebastián','Felipe','Francisco','Javier','Diego','Nicolás','Cristóbal'];
 function chooseLocalCase(history=[]){
  const keys=new Set((history||[]).map(h=>String(h.vehicle||'').toLowerCase()));
  const candidates=cases.map((make,i)=>({make,i})).filter(x=>!Array.from(keys).some(k=>{const c=x.make();return k.includes(c.vehicle.brand.toLowerCase())&&k.includes(c.vehicle.model.toLowerCase())}));
  const pool=candidates.length?candidates:cases.map((make,i)=>({make,i}));
  const selected=pool[Math.floor(Math.random()*pool.length)].make();
  selected.customer.name=names[Math.floor(Math.random()*names.length)];
+ selected.customer.personality=String(selected.customer.personality||'Cliente').replace(/Cercana/g,'Cercano').replace(/práctica/g,'práctico').replace(/Preocupada/g,'Preocupado').replace(/preocupada/g,'preocupado');
  selected.vehicle.kilometers+=Math.floor(Math.random()*21-10)*750;
  selected.customer.opening=selected.customer.opening.replace(/Hola|Buenas tardes|Buenas/g,m=>m);
  selected.origin='local';
@@ -113,17 +114,42 @@ function chooseLocalCase(history=[]){
  selected.id='local-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7);
  return selected;
 }
-function offlineClientReply(c,question){
- const q=String(question||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
- const answers=Array.isArray(c.customer.answers)?c.customer.answers:[];
- const find=(patterns)=>answers.find(a=>patterns.some(w=>a.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().includes(w)));
- if(/hola|buenas|buenos dias/.test(q))return 'Hola, muchas gracias por responder. Me tiene medio preocupado lo que le pasa al auto.';
- if(/cuando|desde|hace cuanto|empezo|primera vez|frecuencia|siempre/.test(q))return `Me empezó hace unos días. ${answers[0]||'No siempre pasa igual, la verdad.'}`;
- if(/frio|caliente|temperatura|motor/.test(q))return find(['caliente','motor','ralenti','testigo'])||'No le sabría decir con precisión; tendría que fijarme.';
- if(/testigo|luz|tablero|check|codigo/.test(q))return find(['testigo','luz','parpade','codigo'])||'No me he fijado si prende alguna luz en el tablero.';
- if(/repar|mantencion|servicio|cambi|taller|bujia|bateria/.test(q))return c.customer.history||'No tengo anotadas todas las mantenciones.';
- if(/fren|ruido|vibra|golpe|aceler|potencia|sintoma/.test(q))return answers[1]||c.complaint;
- if(/km|kilometraje|ano|modelo/.test(q))return `El auto tiene cerca de ${Number(c.vehicle.kilometers||0).toLocaleString('es-CL')} kilómetros, según el tablero.`;
- return 'Mmm, no sé mucho de mecánica. ¿Me podría explicar qué tendría que revisar o en qué fijarme?';
+function offlineClientReply(c, question, history = []) {
+ const norm=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+ const q=norm(question).replace(/[¿?¡!.,]/g,' ').trim();
+ const answers=Array.isArray(c.customer?.answers)?c.customer.answers:[];
+ const mentioned=words=>words.some(w=>q.includes(w));
+ const evidence=words=>answers.find(a=>words.some(w=>norm(a).includes(w)));
+ const spoken=history.filter(x=>x.role==='client').map(x=>norm(x.text)).slice(-7);
+ const reply=(text, alternate)=>spoken.includes(norm(text))&&alternate?alternate:text;
+ const name=c.vehicle?.model||'auto';
+ const fact=answers.join(' ').toLowerCase();
+ // Estas respuestas se basan SOLO en hechos que conoce el propietario; nunca se incluye la causa oculta.
+ if(mentioned(['muchas gracias','gracias','se agradece']))return reply('Gracias a usted, ojalá podamos encontrar qué tiene.','Ya, genial. Usted me avisa qué necesita revisar.');
+ if((q.length<45)&&mentioned(['hola','buenas','buen dia','buenas tardes','que tal'])&&!q.includes('cuando'))return reply('Hola, buenas. Gracias por responderme, me tiene preocupado la falla.','Hola, sí, dígame nomás qué necesita saber.');
+ if(mentioned(['cuantos kilomet','kilometraje','cuanto kilomet','cuanto km','cuantos km','odometro','recorrido']))return `Marca cerca de ${Number(c.vehicle?.kilometers||0).toLocaleString('es-CL')} km en el tablero.`;
+ if(mentioned(['que auto','que vehiculo','marca','modelo','de que ano','cilindrada']))return `Es un ${c.vehicle.brand} ${name} del ${c.vehicle.year}. De motor no cacho mucho, pero eso sale en los papeles.`;
+ if(mentioned(['desde cuando','hace cuanto','cuando comenzo','cuando empezo','primera vez','cuantos dias','tiempo lleva']))return reply('Me empezó hace unos días, pero al principio era bien ocasional.','Hace poco, no sabría decirle el día exacto. Antes no me había pasado así.');
+ if(mentioned(['siempre','a veces','seguido','frecuencia','cada cuanto','todos los dias','intermitente']))return reply('No es siempre. Algunos trayectos anda normal y en otros vuelve a molestar.','Es por ratos, no todos los días se siente igual.');
+ if(mentioned(['frio','caliente','temperatura','se calienta','arranca en frio','cuando se enfria'])){const f=evidence(['caliente','frio','temperatura','al arrancar']);return f?reply(`Por lo que he notado, ${f.charAt(0).toLowerCase()+f.slice(1)}.`,`Eso es lo que me ha pasado más seguido, pero no lo he medido.`):'No he puesto atención a si cambia entre frío y caliente. La próxima vez me puedo fijar.';}
+ if(mentioned(['luz','check','testigo','tablero','codigo','enciende algo','marca algo'])){const f=evidence(['testigo','luz','parpade','check','tablero']);return f?reply(f,'Sí, eso fue lo que observé en el tablero.'):'No recuerdo haber visto una luz extraña, pero tampoco podría asegurárselo.';}
+ if(mentioned(['mantuvo','mantencion','mantenimiento','ultima revision','cambiaste','cambiaron','taller anterior','reparado','bujia','aceite','filtro','bateria','antecedente']))return reply(c.customer?.history||'No tengo anotadas todas las mantenciones.','Eso es lo último que recuerdo que le hicieron; no tengo las boletas a mano.');
+ if(mentioned(['subida','cuesta','pendiente','adelant','aceler','potencia','tirone','fuerza','velocidad'])){const f=evidence(['aceler','pendiente','fuerza','tirone','subida','potencia']);return f?reply(f,`Sí, sobre todo en esas condiciones se nota el problema.`):'No he probado si ocurre más en subida. Solo sé que al conducir se siente distinto que antes.';}
+ if(mentioned(['frena','freno','bache','lomo de toro','hoyo','ruido','golpe','vibra','tiembla','volante','dobla','virar'])){const f=evidence(['ruido','golpe','bache','frena','vibra','tirita','volante','lomo']);return f?reply(f,'Sí, ése es el ruido que le comentaba. No ocurre siempre igual.'):`Lo que más noto es esto: ${c.complaint}. No sé decirle cuál pieza lo provoca.`;}
+ if(mentioned(['consumo','bencina','diesel','combustible','tanque','rendimiento']))return 'No llevo el consumo medido, así que no podría decirle si aumentó realmente.';
+ if(mentioned(['olor','humo','fuga','liquido','perdida de agua','charco']))return 'No he visto nada muy evidente, pero no revisé el motor por debajo. Habría que mirarlo.';
+ if(mentioned(['arranque','partir','enciende','prende','motor de partida'])){const f=evidence(['arranque','partir','enciende']);return f||'Por lo general parte, el problema es cuando lo uso. No he comprobado nada más.';}
+ if(mentioned(['diagnostico','que crees','que piensa','de que sera','que puede ser','que tiene']))return 'No tengo idea de qué puede ser; preferiría que lo revise bien antes de comprar algún repuesto.';
+ if(mentioned(['presupuesto','cobrar','precio','cuanto sale','cuanto cuesta','repuesto']))return '¿Me podría avisar primero cuánto sale revisar y qué habría que cambiar? No quiero comprar piezas sin estar seguro.';
+ if(mentioned(['puedo revis','venir','disponible','cita','horario','cuando puede','ubicacion','donde esta']))return 'Podemos coordinar para que lo vea. Preferiría que primero me diga qué necesita revisar.';
+ if(mentioned(['cuando pasa','en que momento','en que condiciones','como sucede','como se presenta','explicame','cuentame','mas detalle']))return reply(`Lo que me preocupa es esto: ${c.complaint}. ${answers[0]||'No ocurre todo el tiempo.'}`,`Se presenta por ratos. ${answers[1]||'No le podría dar más detalles sin volver a probarlo.'}`);
+ if(mentioned(['despues de','antes de','relacion','paso algo','que hiciste']))return reply('No recuerdo que haya ocurrido justo después de alguna reparación.','Lo empecé a notar usando el auto normalmente; no sabría relacionarlo con algo específico.');
+ if(mentioned(['sabes','te fijaste','recuerdas','observaste']))return reply('No me fijé en ese detalle, pero puedo revisarlo cuando vuelva a pasar.','No le quiero inventar algo, la verdad es que no lo sé.');
+ const alternatives=[
+  `De eso no estoy seguro. Lo que sí sé es que ${c.complaint.toLowerCase()}. ¿Le sirve ese dato?`,
+  'Pucha, eso no lo he revisado. Si me dice exactamente en qué fijarme, puedo intentar contárselo.',
+  'Prefiero decirle que no sé antes que darle un dato equivocado. ¿Qué necesita que observe?'
+ ];
+ return alternatives[history.filter(x=>x.role==='mechanic').length%alternatives.length];
 }
 export {chooseLocalCase,offlineClientReply};
