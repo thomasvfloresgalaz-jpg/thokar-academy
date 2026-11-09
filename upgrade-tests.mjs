@@ -14,19 +14,19 @@ test('Catálogo libre: sistemas, componentes y 70+ revisiones disponibles',()=>{
  const meter=CATALOG_TESTS.find(x=>x.tool==='multimeter');assert.ok(guideFor(meter).some(x=>x.includes('Punta roja')));
 });
 test('Catálogo: medición incorrecta no registrada y lectura didáctica estable',async()=>{
- const {session}=await call('/api/case',{mode:'local'});const t=CATALOG_TESTS.find(x=>x.componentId==='bateria'&&x.tool==='multimeter');
+ const {session}=await call('/api/case-start',{mode:'local'});const t=CATALOG_TESTS.find(x=>x.componentId==='bateria'&&x.tool==='multimeter');
  const bad=await call('/api/test',{session,id:t.id,mode:'OHM',positive:'x',negative:'y'});assert.equal(bad.connected,false);
  const d={session,id:t.id,mode:t.mode,positive:t.positive,negative:t.negative};const a=await call('/api/test',d),b=await call('/api/test',d);
  assert.equal(a.connected,true);assert.equal(a.generic,true);assert.deepEqual(a,b);
 });
 test('Respuestas locales distintas y nombres de hombres',async()=>{
- const {session,case:c}=await call('/api/case',{mode:'local'});assert.ok(['Matías','Ignacio','César','Alejandro','Rodrigo','Sebastián','Felipe','Francisco','Javier','Diego','Nicolás','Cristóbal','Andrés','Gabriel','Tomás'].includes(c.customer.name));
+ const {session,case:c}=await call('/api/case-start',{mode:'local'});assert.ok(['Matías','Ignacio','César','Alejandro','Rodrigo','Sebastián','Felipe','Francisco','Javier','Diego','Nicolás','Cristóbal','Andrés','Gabriel','Tomás'].includes(c.customer.name));
  const km=await call('/api/chat',{session,message:'¿Cuántos km tiene el auto?',history:[]});
  const val=await call('/api/chat',{session,message:'¿Desde cuándo lo nota?',history:[]});
  assert.notEqual(km.reply,val.reply);assert.match(km.reply,/km/);
 });
 test('Evaluación no cambia si se presiona dos veces sin nuevas acciones',async()=>{
- const {session}=await call('/api/case',{mode:'local'});const c=unseal(session),correct=c.repairs.find(x=>x.correct);
+ const {session}=await call('/api/case-start',{mode:'local'});const c=unseal(session),correct=c.repairs.find(x=>x.correct);
  const events=[{type:'message'},...c.tests.filter(x=>x.decisive).map(x=>({type:'test',id:x.id})),{type:'repair',id:correct.id},{type:'verify',success:true}];
  const answer={hypothesis:c.hiddenCause,justification:'Comprobé las pruebas discriminantes, comparé los resultados y confirmé la reparación mediante una verificación de funcionamiento.',customerMessage:'Le explico que se revisó la falla, se realizó la reparación necesaria y se comprobó que funciona correctamente.'};
  const req={session,events,answer,attempt:1};const a=await call('/api/evaluate',req),b=await call('/api/evaluate',req);

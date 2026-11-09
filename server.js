@@ -6,10 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { chooseLocalCase, offlineClientReply } from './offline-cases.js';
 import {CATALOG_TESTS, BY_ID, classifyTest} from './catalog.js';
 import {questionIntent,normalizeQuestion} from './memory.js';
+import {requestGemini,parseGeminiJSON,textFromGenerateContent,geminiModels} from './gemini-client.js';
 
 const ROOT=path.dirname(fileURLToPath(import.meta.url));
 const PORT=Number(process.env.PORT||3000);
-const VERSION='2.7.0';
+const VERSION='2.8.0';
 const FORCE_LOCAL=process.env.ACADEMY_LOCAL_ONLY==='1';
 const MODEL=(process.env.GEMINI_MODEL||'gemini-3.8-flash').replace(/^models\//,'');
 const GEMINI_API_KEY=process.env.GEMINI_API_KEY||'';
@@ -26,7 +27,7 @@ const allowedAssets=new Map([
 function send(res,status,body){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'});res.end(JSON.stringify(body));}
 function error(res,status,message){return send(res,status,{error:message});}
 function clientIp(req){return String(req.socket.remoteAddress||'unknown');}
-function rate(req,limit=36){const ip=clientIp(req);const t=Date.now();let entry=counters.get(ip);if(!entry||t-entry.time>60000)entry={time:t,requests:0};entry.requests++;counters.set(ip,entry);if(counters.size>500)for(const [k,v] of counters)if(t-v.time>120000)counters.delete(k);return entry.requests>limit;}
+function rate(req,limit=36,group="main"){const ip=clientIp(req)+"|"+group;const t=Date.now();let entry=counters.get(ip);if(!entry||t-entry.time>60000)entry={time:t,requests:0};entry.requests++;counters.set(ip,entry);if(counters.size>500)for(const [k,v] of counters)if(t-v.time>120000)counters.delete(k);return entry.requests>limit;}
 function compare(a,b){const aa=Buffer.from(a),bb=Buffer.from(b);return aa.length===bb.length&&crypto.timingSafeEqual(aa,bb);}
 function auth(req){return ACCESS_CODE && compare(String(req.headers['x-academy-code']||''),ACCESS_CODE);}
 async function body(req,limit=180000){let raw='';for await(const chunk of req){raw+=chunk;if(raw.length>limit){const e=new Error('Solicitud demasiado grande');e.code=413;throw e;}}try{return JSON.parse(raw||'{}');}catch{const e=new Error('JSON inválido');e.code=400;throw e;}}
@@ -45,34 +46,9 @@ const auditSchema=obj({approved:S.boolean,issues:arr(S.string)});
 const studySchema=obj({title:S.string,summary:S.string,steps:arr(S.string),warnings:arr(S.string),quiz:arr(obj({question:S.string,answer:S.string})),sourceStatus:S.string});
 const CORE=`Eres un diseñador de simuladores de diagnóstico automotriz para técnicos mecánicos chilenos. SOLO vehículos de combustión (no híbridos ni eléctricos). Usa lenguaje natural del taller en Chile. No inventes valores OEM ni afirmes manuales oficiales que no consultaste. Toda lectura es SIMULADA, diseñada para ese caso. Si la falla necesita un dato específico no verificado, usa comparaciones relativas, tensiones de alimentación bien fundamentadas o lectura cualitativa. Las pruebas se deben condicionar a estado de motor/conector/temperatura. Prohíbe métodos inseguros: jamás recomendar medir resistencia en circuito energizado, ni cortocircuitar pines, ni alta tensión, ni manipular sistemas de seguridad de forma peligrosa. Los casos deben tener causa fija y evidencias consistentes. Nunca atribuyas síntomas de forma imposible; la descripción es para entrenamiento, no reparación real.`;
 const CASE_SYS=CORE+`\nGenera un NUEVO caso técnicamente coherente. No repitas vehículos/causas recientes que se incluyan en la solicitud. Usa el objeto de entrada como plantilla de caso diferente en CADA generación, considera recentGenerations y nonce. Responde solo un caso completo; ninguna explicación adicional. TODOS LOS CLIENTES TIENEN NOMBRES MASCULINOS CHILENOS. customer.answers incluye hechos del cliente para contestar las preguntas habituales señaladas por learnedIntents, sin que el cliente sepa la falla. Usa vocabulario chileno: motor de partida, correa de accesorios, mantención, tren delantero, bujías, ampolletas, bencina cuando aplique; evita términos como centralita, jaloneos, cajuela y calarse.  Privilegia marcas/modelos frecuentes de Chile, diferentes años/motores compatibles; si no estás seguro del motor exacto, usa "versión a confirmar" en lugar de inventarlo. Asigna bodyType según carrocería real del modelo (hatchback, sedan, suv, pickup o van). Vehículo con personalidad e historial originales; 8 a 11 pruebas diagnósticas, mezclando pruebas decisivas, neutras, verificación y descartes; cada prueba result y reading permanentes, no contradicciones; las pruebas con multímetro deben indicar mode (DCV/ACV/OHM/CONT), positive y negative (puntos de conexión claros) y safety; las otras pueden poner mode="N/A", positive="N/A", negative="N/A". Al menos 2 pruebas decisivas (decisive true), al menos 2 con multímetro si sistema es eléctrico o motor electrónico. 4 a 6 reparaciones y EXACTAMENTE UNA con correct=true; reparaciones incorrectas no solucionan la causa. No mostrar la causa al cliente. customer.answers contiene hechos que el propietario sí conoce para responder coherente; no información de scanner. Usa id cortos únicos letras/números. Alterna sistemas motor, electrónica de baja tensión, suspensión, dirección, frenos, transmisión, climatización, carga/arranque. No incluir sistema SRS/airbags o alto voltaje. Los valores en reading son didácticos, NO presentarlos como manual OEM. Toda lectura debe explicar las condiciones de medición en setup. Las lecturas se fijan para todo el caso. Revisa internamente coherencia antes de devolver JSON.`;
-function jsonFromInteraction(j){let output=j.output_text;if(!output&&Array.isArray(j.outputs))output=j.outputs.filter(o=>o.type==='text').map(o=>o.text||'').join('');if(!output&&Array.isArray(j.output))output=j.output.filter(o=>o.type==='text').map(o=>o.text||'').join('');if(!output&&Array.isArray(j.steps))output=j.steps.filter(o=>o.type==='model_output').flatMap(o=>o.content||[]).map(o=>o.text||'').join('');if(!output)throw new Error('Gemini devolvió una respuesta sin texto.');try{return JSON.parse(String(output).replace(/^```json\s*|```\s*$/g,''));}catch{throw new Error('La respuesta de Gemini no fue JSON válido.');}}
-async function gemini(system,payload,schema,thinking='medium'){
- if(MOCK)return mockResponse(system,payload);
- if(!GEMINI_API_KEY)throw new Error('Falta GEMINI_API_KEY en las variables de Render.');
- const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),40000);
- try{
-  const response=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
-   method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':GEMINI_API_KEY,'Api-Revision':'2026-05-20'},
-   body:JSON.stringify({model:MODEL,store:false,system_instruction:system,input:JSON.stringify(payload),response_format:{type:'text',mime_type:'application/json',schema},generation_config:{thinking_level:thinking}}),signal:controller.signal
-  });
-  const j=await response.json().catch(()=>({}));if(!response.ok){const message=String(j.error?.message||`Gemini HTTP ${response.status}`);if(response.status===429)throw new Error('Gemini devolvió 429: cuota o límite de solicitudes agotado. Revisa los límites de tu proyecto en Google AI Studio.');if(response.status===403)throw new Error('Clave sin permiso o facturación pendiente para '+MODEL+'. '+message.slice(0,150));throw new Error(message.slice(0,330));}
-  return jsonFromInteraction(j);
- }catch(e){if(e.name==='AbortError')throw new Error('Gemini demoró demasiado en responder. Inténtalo nuevamente.');throw e;}finally{clearTimeout(timeout);}
-}
-// El chat NO requiere salida estructurada. Gemini puede responder texto normal, sin forzarlo a JSON.
-// La API de Interactions devuelve el texto en steps[].content[].text (o output_text).
-function interactionText(response){
- if(typeof response?.output_text==='string'&&response.output_text.trim())return response.output_text.trim();
- const steps=Array.isArray(response?.steps)?response.steps:[];
- const modelOutputs=steps.filter(x=>x?.type==='model_output');
- const blocks=modelOutputs.flatMap(x=>Array.isArray(x.content)?x.content:[]).filter(x=>x?.type==='text'&&typeof x.text==='string');
- const text=blocks.map(x=>x.text).join('\n').trim();
- if(text)return text;
- for(const root of [response?.outputs,response?.output])if(Array.isArray(root)){
-  const out=root.map(x=>x?.text||'').filter(Boolean).join('\n').trim();if(out)return out;
- }
- return '';
-}
+// Método de consulta compatible con THOKAR ZERO: generateContent.
+// No se usa Interactions ni se exige una salida JSON en conversaciones normales.
+const parseModelJSON = data=>parseGeminiJSON(typeof data==='string'?data:textFromGenerateContent(data));
 function normalizeChatText(reply){
  let text=String(reply||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
  if(text.startsWith('{'))try{const parsed=JSON.parse(text);if(typeof parsed.reply==='string')text=parsed.reply;}catch{}
@@ -83,85 +59,69 @@ function aiFailureCategory(err){
  if(/429|resource_exhausted|quota|límite de solicitudes|rate limit/.test(message))return 'quota';
  if(/403|401|api key|permission|permiso|clave/.test(message))return 'access';
  if(/400|invalid_request|invalid argument|modelo|model/.test(message))return 'request';
- if(/timeout|demoró|abort|tardó|network|fetch|conexión/.test(message))return 'connection';
+ if(/timeout|demoró|abort|tardó|network|fetch|conexión|tiempo/.test(message))return 'connection';
  return 'service';
 }
 function aiFailureMessage(category){
- return ({quota:'Gemini rechazó el chat por límite de cuota (429). Comprueba la cuota del modelo en Google AI Studio.',
- access:'Gemini rechazó las credenciales o permisos. Revisa la clave API y la facturación en Render/Google AI Studio.',
- request:'Gemini rechazó la solicitud del chat. Revisa el modelo configurado en Render y los registros del servidor.',
- connection:'Gemini no respondió por conexión o demora. El cliente seguirá respondiendo desde el caso.',
- service:'Gemini no devolvió una respuesta utilizable. El cliente seguirá respondiendo desde el caso.'})[category]||'Gemini no disponible';
+ return ({quota:'Gemini rechazó el chat por límite de cuota (429). Revisa la cuota en Google AI Studio.',
+ access:'Gemini rechazó las credenciales o permisos. Revisa GEMINI_API_KEY y tu proyecto.',
+ request:'Gemini rechazó la solicitud del chat. Comprueba GEMINI_MODEL en Render.',
+ connection:'Gemini no respondió por conexión o demora. El cliente continúa con información local del caso.',
+ service:'Gemini no entregó una respuesta utilizable. El cliente continúa con información local del caso.'})[category]||'Gemini no disponible';
+}
+async function gemini(system,payload,schema){
+ if(MOCK)return mockResponse(system,payload);
+ return (await requestGemini({system,contents:[{role:'user',text:JSON.stringify(payload)}],kind:'case',json:true,schema,timeoutMs:26000})).value;
 }
 async function geminiChat(system,payload,model=CHAT_MODEL){
- if(MOCK){const q=String(payload?.ultimaPregunta||'').toLowerCase();return {text:q.includes('fren')?'No, cuando freno no he sentido algo distinto.':q.includes('frío')||q.includes('caliente')?'Se nota más después de un rato de manejo, cuando el motor ya está caliente.':'Le cuento lo que he visto: no falla siempre, pero me preocupa cuando pasa.',model};}
- if(!GEMINI_API_KEY)throw new Error('Falta GEMINI_API_KEY en Render.');
- const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),28000);
- try{
-  const response=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
-   method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':GEMINI_API_KEY,'Api-Revision':'2026-05-20'},
-   // Chat conversacional: sin response_format ni schema, a diferencia de la generación de casos.
-   body:JSON.stringify({model,store:false,system_instruction:system,input:JSON.stringify(payload),generation_config:{thinking_level:'low'}}),
-   signal:controller.signal
-  });
-  const result=await response.json().catch(()=>({}));
-  if(!response.ok){const details=String(result?.error?.message||'').slice(0,230);throw new Error(`Gemini HTTP ${response.status}: ${details}`);}
-  const text=normalizeChatText(interactionText(result));
-  if(!text)throw new Error('Gemini no devolvió contenido de texto.');
-  return {text,model};
- }catch(err){if(err.name==='AbortError')throw new Error('Timeout en respuesta de Gemini');throw err;}finally{clearTimeout(timer);}
+ if(MOCK){const q=String(payload?.ultimaPregunta||payload?.pregunta||'').toLowerCase();return {text:q.includes('fren')?'No, cuando freno no he sentido algo distinto.':q.includes('frío')||q.includes('caliente')?'En frío anda bien, pero empieza a fallar después de manejar un rato.':'Hasta ahora no me había pasado. Empezó hace unos días y por eso le escribí.',model};}
+ const previous=Array.isArray(payload?.historialConversacion)?payload.historialConversacion.slice(-12):[];
+ const profile=payload?.cliente||{};
+ const contents=previous.map(m=>({role:m.role==='client'?'model':'user',text:String(m.text||'').slice(0,550)}));
+ const latest=String(payload?.ultimaPregunta||payload?.pregunta||'').slice(0,800);
+ contents.push({role:'user',text:latest});
+ const personaSystem=system+'\nPERFIL Y ANTECEDENTES DEL CLIENTE, NO CAUSA DE LA FALLA: '+JSON.stringify(profile).slice(0,6500);
+ const result=await requestGemini({system:personaSystem,contents,kind:'chat',json:false,timeoutMs:25000});
+ return {text:normalizeChatText(result.text),model:result.model};
 }
 const CHAT_SYSTEM=`Eres un cliente CHILENO HOMBRE que conversa por chat con un mecánico. Actúa siempre como un propietario real, con lenguaje chileno natural y sin tecnicismos innecesarios. No eres mecánico. Solo sabes los síntomas que percibiste, el historial y los hechos proporcionados. Si no conoces algo, dilo con naturalidad; nunca inventes mediciones, fallas confirmadas ni trabajos que no aparecen en el perfil. No puedes conocer ni revelar una causa oculta del caso. RESPONDE concretamente a la última pregunta, teniendo en cuenta lo que ya conversaron. No repitas las mismas frases mecánicamente. Usa 1 a 3 oraciones como mensaje de chat. Responde SOLO TEXTO conversacional, sin JSON, sin markdown, sin listas ni comillas.`;
 
-// Solo la creación de casos usa el modo de fondo: Gemini conserva temporalmente la interacción
-// para que Render pueda consultar el resultado sin mantener conexiones abiertas por minutos.
-async function backgroundRequest(url,options={}){
- const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),25000);
- try{
-  const response=await fetch(url,{...options,signal:controller.signal,headers:{'x-goog-api-key':GEMINI_API_KEY,'Api-Revision':'2026-05-20',...(options.headers||{})}});
-  const data=await response.json().catch(()=>({}));
-  if(!response.ok){const desc=String(data.error?.message||`HTTP ${response.status}`).slice(0,320);
-   if(response.status===429)throw new Error('Gemini rechazó la solicitud por cuota (429). Revisa tu proyecto en Google AI Studio.');
-   if(response.status===403)throw new Error('Gemini rechazó el acceso (403): revisa la clave y facturación. '+desc);
-   throw new Error('Gemini HTTP '+response.status+': '+desc);
-  }
-  return data;
- }catch(err){if(err.name==='AbortError')throw new Error('No fue posible conectar con Gemini en 25 segundos. La aplicación no ha generado un caso local ni repetirá la consulta sin que lo decidas.');throw err;}
- finally{clearTimeout(timer);}
-}
+// Un único generateContent por modelo. El trabajo se realiza en el servidor y
+// se consulta con polling: nunca depende de mantener abierta la solicitud HTTP.
+const jobs=new Map();
+function pruneJobs(){const now=Date.now();for(const [id,j] of jobs)if(now-j.created>25*60*1000)jobs.delete(id);}
 function caseDirective(d){
  const hist=Array.isArray(d.history)?d.history.slice(-12).map(h=>({vehicle:stripText(h.vehicle,80),system:stripText(h.system,60),cause:stripText(h.cause,100),score:Math.min(100,Number(h.score)||0)})):[];
  const level=hist.length===0?'Evaluación inicial':hist.slice(-4).every(h=>h.score>=80)?'Avanzar dificultad':'Progresión gradual según resultados';
  return {task:'generar caso de diagnóstico nuevo, independiente y coherente',level,history:hist,recentGenerations:Array.isArray(d.recent)?d.recent.slice(-16).map(x=>({title:stripText(x.title,90),vehicle:stripText(x.vehicle,85),system:stripText(x.system,60)})):[],learnedIntents:Array.isArray(d.learnedIntents)?d.learnedIntents.slice(0,14).map(x=>stripText(x,50)):[],nonce:crypto.randomBytes(9).toString('hex'),note:'Devuelve un solo caso NUEVO en el formato indicado. 8 a 11 pruebas, 4 a 6 reparaciones, una correcta. Mantén coherencia y cuida seguridad. Una única llamada de Gemini por caso, sin auditor adicional.'};
 }
 async function createBackgroundCase(d){
- if(MOCK){const c=validateCase(mockCase());c.origin='ai';return {status:'completed',case:publicCase(c),session:seal(c),mode:'ai',notice:'Caso generado por simulación de pruebas.'};}
- if(FORCE_LOCAL)throw new Error('ACADEMY_LOCAL_ONLY está activado en Render. Desactívalo si deseas generar con Gemini.');
- if(!GEMINI_API_KEY)throw new Error('Falta GEMINI_API_KEY en Render. No se ha creado un caso local porque seleccionaste Gemini.');
- const data=await backgroundRequest('https://generativelanguage.googleapis.com/v1beta/interactions',{
-  method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:MODEL,store:true,background:true,system_instruction:CASE_SYS,input:JSON.stringify(caseDirective(d)),response_format:{type:'text',mime_type:'application/json',schema:caseSchema},generation_config:{thinking_level:'low'}})
- });
- if(data.status==='completed'||(!data.status&&data.output_text))return completedBackgroundCase(data,data.id||crypto.randomUUID(),Date.now());
- if(!data.id)throw new Error('Gemini no entregó un identificador para consultar la generación.');
- if(['failed','cancelled','incomplete','requires_action'].includes(data.status))throw new Error('Gemini no completó la generación: '+String(data.error?.message||data.status));
- return {status:'pending',job:seal({kind:'gemini-case',id:data.id,created:Date.now()}),message:'Gemini está preparando el diagnóstico. Puedes mantener abierta esta pantalla; no se realizará otra generación.'};
-}
-function completedBackgroundCase(data,id,created){
- const c=validateCase(jsonFromInteraction(data));c.origin='ai';
- // Identificador estable para el mismo resultado, también al recuperar una generación interrumpida.
- c.id=crypto.createHash('sha256').update(String(id)).digest('hex').slice(0,32);
- c.createdAt=new Date(created).toISOString();
- return {status:'completed',case:publicCase(c),session:seal(c),mode:'ai',notice:''};
+ if(MOCK){const c=validateCase(mockCase());c.origin='ai';return {status:'completed',case:publicCase(c),session:seal(c),mode:'ai',notice:'Caso de prueba generado mediante simulación.'};}
+ if(FORCE_LOCAL)throw new Error('ACADEMY_LOCAL_ONLY está activo en Render. Desactívalo para generar con Gemini.');
+ if(!GEMINI_API_KEY)throw new Error('Falta GEMINI_API_KEY en Render. No se abrió un caso local.');
+ pruneJobs();
+ const id=crypto.randomUUID(),created=Date.now(),job={id,created,status:'pending',result:null,message:''};
+ jobs.set(id,job);
+ // La promesa se maneja explícitamente para que no termine en un rechazo sin gestionar.
+ job.promise=(async()=>{
+  try{
+   const content=await requestGemini({system:CASE_SYS,contents:[{role:'user',text:JSON.stringify(caseDirective(d))}],kind:'case',json:true,schema:caseSchema,timeoutMs:112000,maxOutputTokens:8500});
+   const c=validateCase(content.value);c.origin='ai';
+   c.id=crypto.createHash('sha256').update(id).digest('hex').slice(0,32);c.createdAt=new Date(created).toISOString();
+   job.result={status:'completed',case:publicCase(c),session:seal(c),mode:'ai',notice:'Caso generado con '+content.model+'.'};
+   job.status='completed';
+  }catch(ex){job.status='failed';job.message=String(ex.message||'Gemini no completó el caso.').slice(0,380);console.warn('[Generación Gemini]',job.message);}
+ })();
+ return {status:'pending',job:seal({kind:'case-v28',id,created}),message:'Gemini está generando un nuevo caso. La aplicación consultará el resultado sin enviar otra generación.'};
 }
 async function pollBackgroundCase(token){
- const job=unsealPayload(token);
- if(job?.kind!=='gemini-case'||!/^[-_a-zA-Z0-9.]{5,200}$/.test(String(job.id||''))||!Number.isFinite(job.created))throw new Error('Identificador de generación inválido.');
- if(Date.now()-job.created>30*60*1000)throw new Error('La sesión de generación tiene más de 30 minutos. Solicita un caso nuevo; no se reemplazó por uno local.');
- if(MOCK){const c=validateCase(mockCase());c.origin='ai';return {status:'completed',case:publicCase(c),session:seal(c),mode:'ai',notice:''};}
- const data=await backgroundRequest('https://generativelanguage.googleapis.com/v1beta/interactions/'+encodeURIComponent(job.id));
- if(data.status==='completed'||(!data.status&&data.output_text))return completedBackgroundCase(data,job.id,job.created);
- if(['failed','cancelled','incomplete','requires_action'].includes(data.status))return {status:'failed',message:'Gemini detuvo la generación: '+String(data.error?.message||data.status).slice(0,250)};
- return {status:'pending',message:'Gemini sigue generando el caso. No es necesario iniciar otra solicitud.'};
+ const info=unsealPayload(token);
+ if(info?.kind!=='case-v28'||!/^[a-f0-9-]{36}$/.test(String(info.id||'')))throw new Error('Identificador de generación inválido.');
+ pruneJobs();const job=jobs.get(info.id);
+ if(!job) return {status:'failed',message:'Render reinició el servidor o el trabajo expiró. La generación no puede recuperarse; solicita otra. No se abrirá un caso local automáticamente.'};
+ if(job.status==='failed')return {status:'failed',message:job.message};
+ if(job.status==='completed')return job.result;
+ return {status:'pending',message:'Gemini sigue generando. No es necesario iniciar otra solicitud.'};
 }
 function validateCase(c){
  if(!c||typeof c.title!=='string'||!c.vehicle||!c.customer||!Array.isArray(c.tests)||!Array.isArray(c.repairs))throw new Error('La IA devolvió un caso incompleto.');
@@ -232,7 +192,7 @@ const server=http.createServer(async(req,res)=>{
    const bytes=await fs.readFile(path.join(ROOT,name));res.writeHead(200,{'Content-Type':mime,'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'same-origin','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self'; base-uri 'none'; object-src 'none'"});return res.end(bytes);
   }
   if(req.method!=='POST'||!url.pathname.startsWith('/api/'))return error(res,404,'No encontrado');
-  if(rate(req))return error(res,429,'Demasiadas solicitudes; vuelve a intentar en un minuto.');
+  if(rate(req,url.pathname==='/api/case-progress'?240:36,url.pathname==='/api/case-progress'?'progress':'main'))return error(res,429,'Demasiadas solicitudes; vuelve a intentar en un minuto.');
   if(!ACCESS_CODE)return error(res,503,'Configura ACADEMY_ACCESS_CODE en Render antes de usar el servidor.');
   if(!auth(req))return error(res,401,'Código de acceso incorrecto. Revísalo en Ajustes.');
   const d=await body(req);
@@ -240,7 +200,7 @@ const server=http.createServer(async(req,res)=>{
   if(url.pathname==='/api/check-ai'){
    if(!GEMINI_API_KEY)return send(res,200,{ok:false,ai:false,model:CHAT_MODEL,message:'GEMINI_API_KEY no está configurada en Render.'});
    try{const check=await geminiChat('Responde en español con una frase corta y natural, solo texto. No JSON.',{pregunta:'Hola, ¿puedes responder normalmente?'},CHAT_MODEL);
-    return send(res,200,{ok:!!check.text,ai:true,model:CHAT_MODEL,message:'Conexión correcta. El modelo del chat devolvió texto normal.'});}
+    return send(res,200,{ok:!!check.text,ai:true,model:check.model,message:'Conexión correcta. El modelo '+check.model+' respondió en texto normal.'});}
    catch(ex){const category=aiFailureCategory(ex);console.warn('[Gemini chat check]',category,String(ex.message).slice(0,180));return send(res,200,{ok:false,ai:false,model:CHAT_MODEL,reason:category,message:aiFailureMessage(category)});}
   }
   if(url.pathname==='/api/case-start'){
@@ -251,32 +211,6 @@ const server=http.createServer(async(req,res)=>{
    return send(res,200,await createBackgroundCase(d));
   }
   if(url.pathname==='/api/case-progress')return send(res,200,await pollBackgroundCase(d.job));
-  if(url.pathname==='/api/case'){
-   const hist=Array.isArray(d.history)?d.history.slice(-12).map(h=>({vehicle:stripText(h.vehicle,80),system:stripText(h.system,60),cause:stripText(h.cause,100),score:Math.min(100,Number(h.score)||0)})):[];
-   const onlyLocal=d.mode==='local'||FORCE_LOCAL||(!GEMINI_API_KEY&&!MOCK);
-   const recentLocal=Array.isArray(d.recent)?d.recent.slice(-20).map(x=>({vehicle:stripText(x.vehicle,100)})):[];const localHistory=[...hist,...recentLocal];
-   let c, notice='';
-   if(onlyLocal){c=chooseLocalCase(localHistory);notice=FORCE_LOCAL?'Modo local solicitado en Render.':d.mode==='local'?'Elegiste generar un caso de práctica local.':'Gemini no está configurado; se cargó una práctica local para que puedas continuar.';}
-   else{
-    const level=hist.length===0?'Evaluación inicial':hist.slice(-4).every(h=>h.score>=80)?'Avanzar dificultad':'Progresión gradual según resultados';
-    try{
-     const directive={task:'generar caso de diagnóstico nuevo, independiente y coherente',level,history:hist,recentGenerations:Array.isArray(d.recent)?d.recent.slice(-16).map(x=>({title:stripText(x.title,90),vehicle:stripText(x.vehicle,85),system:stripText(x.system,60)})):[],learnedIntents:Array.isArray(d.learnedIntents)?d.learnedIntents.slice(0,14).map(x=>stripText(x,50)):[],nonce:crypto.randomBytes(9).toString('hex'),note:'Crea una combinación NUEVA de vehículo, cliente masculino, falla, síntomas, evidencias y pruebas. Respeta formato JSON y reglas de seguridad. Una llamada de Gemini por caso.'};
-     c=validateCase(await gemini(CASE_SYS,directive,caseSchema,'medium'));
-     c.origin='ai';
-     // Una sola llamada por caso por defecto. Validación local obligatoria; auditor opcional.
-     if(process.env.CASE_AUDIT==='1'){
-       const audit=await gemini(CORE+'\nAudita si el caso es técnicamente coherente. Devuelve approved e issues.',{case:c},auditSchema,'low');
-       if(!audit.approved)throw new Error('El caso generado fue rechazado por la revisión técnica.');
-     }
-    }catch(ex){
-      console.warn('Generación IA falló; se habilitó modo local:',ex.message);
-      c=chooseLocalCase(localHistory);
-      notice='Gemini no pudo generar el caso ('+String(ex.message).slice(0,140)+'). Se abrió una práctica local, sin perder tu sesión.';
-    }
-   }
-   c=validateCase(c);
-   return send(res,200,{case:publicCase(c),session:seal(c),mode:c.origin==='local'?'local':'ai',notice});
-  }
   if(url.pathname==='/api/chat'){
    const c=unseal(d.session),message=stripText(d.message,800).trim();if(!message)return error(res,400,'Escribe una pregunta para el cliente.');
    const past=safeHistory(d.history),norm=normalizeQuestion(message);
@@ -355,4 +289,4 @@ const server=http.createServer(async(req,res)=>{
  }catch(e){console.error('THOKAR:',e.message);const code=e.code||((e.message.includes('restaurar')||e.message.includes('inválido'))?400:502);return error(res,code,String(e.message).slice(0,360));}
 });
 if(process.env.NODE_ENV!=='test' || process.env.RUN_SERVER==='1')server.listen(PORT,'0.0.0.0',()=>console.log(`THOKAR Academy ${VERSION} · http://0.0.0.0:${PORT} · ${MODEL}`));
-export {server,validateCase,publicCase,seal,unseal,baseGrade,mockCase,jsonFromInteraction,interactionText,normalizeChatText,aiFailureCategory};
+export {server,validateCase,publicCase,seal,unseal,baseGrade,mockCase,parseModelJSON,normalizeChatText,aiFailureCategory};
