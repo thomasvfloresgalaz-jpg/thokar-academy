@@ -1,12 +1,12 @@
 {
   "name": "thokar-academy",
-  "version": "2.4.0",
+  "version": "2.7.0",
   "private": true,
   "description": "Simulador adaptativo de diagnóstico automotriz con Gemini",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test tests.mjs resilience-tests.mjs upgrade-tests.mjs"
+    "test": "node --test tests.mjs resilience-tests.mjs upgrade-tests.mjs background-tests.mjs chat-tests.mjs regression27-tests.mjs"
   },
   "engines": { "node": ">=20" }
 }

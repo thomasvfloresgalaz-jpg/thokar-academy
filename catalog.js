@@ -55,6 +55,11 @@ const S=[
  ['cmp','Sensor CMP (árbol de levas)','engine',[
   ['Sincronización de señales','scanner','N/A','','','Motor en marcha o arranque según equipo','Sincronización consultada','Los PID varían por fabricante'],
   ['Alimentación CMP','multimeter','DCV','Pin alimentación CMP','Masa sensor CMP','Conectores verificados en diagrama','Comprobación eléctrica registrada','No aplicar método universal a sensores inductivos']]],
+ ['oxigeno','Sensor de oxígeno (sonda lambda)','engine',[
+  ['Lectura de corrección de combustible y sensores O₂','scanner','N/A','','','Motor a temperatura de trabajo y escáner compatible; identificar sensor anterior/posterior al catalizador','Lecturas de oxígeno y correcciones consultadas','La respuesta depende de sensor convencional o de banda ancha'],
+  ['Inspección de cableado y conector O₂','visual','N/A','','','Motor apagado y escape frío; comprobar ubicación y conexiones','Conexiones revisadas (simulación)','Evita tocar el escape caliente'],
+  ['Alimentación del calefactor del O₂','multimeter','DCV','Alimentación del calefactor O₂ (pin identificado)','Masa del circuito (pin identificado)','Diagrama específico confirmado; condición de activación verificada','Alimentación del calefactor comprobada (simulación)','No asumir pin, tensión ni estrategia de activación sin documentación'],
+  ['Señal de oxígeno y respuesta del sensor','oscilloscope','N/A','','','Confirmar tipo de sensor, equipo y condiciones de operación según fabricante','Señal evaluada cualitativamente (simulación)','Los sensores de banda ancha no se prueban como una sonda de 0–1 V']]],
  ['can','Red CAN y comunicaciones','cabin',[
   ['Escáner: módulos accesibles','scanner','N/A','','','Contacto ON, escáner compatible','Módulos y comunicación revisados','Un fallo de comunicación requiere investigar alimentación y red'],
   ['Resistencia de terminación (solo aislado)','multimeter','OHM','CAN-H (pines verificados)','CAN-L (pines verificados)','Red completamente desenergizada; confirmar aislamiento','Resistencia evaluada (sin valor OEM)','No medir resistencia con red energizada']]]]},
@@ -65,6 +70,10 @@ const S=[
  ['aceleracion','Cuerpo de aceleración electrónico','engine',[
   ['Lectura TPS / posición mariposa','scanner','N/A','','','Contacto ON, según procedimiento','Posición de aceleración examinada','Adaptaciones dependen del fabricante'],
   ['Inspección de acumulación de suciedad','visual','N/A','','','Motor apagado; evitar forzar mariposa','Mariposa y conducto revisados','No limpiar sin procedimiento específico']]],
+ ['oxigeno','Sensor de oxígeno (sonda lambda)','engine',[
+  ['Lectura de señal de sensor de oxígeno','scanner','N/A','','','Motor caliente, equipo compatible; confirmar sensor antes/después del catalizador y tipo de sonda','Datos de O₂ y estado de lazo consultados (simulación)','No asumir rangos de 0 a 1 V en sondas de banda ancha'],
+  ['Inspección de la sonda y el arnés','visual','N/A','','','Motor apagado y escape frío; revisar conector sin desmontar caliente','Arnés y conector de sonda revisados (simulación)','El daño térmico puede afectar el cableado'],
+  ['Respuesta de la sonda bajo condiciones controladas','scanner','N/A','','','Comparar datos de control de mezcla según tipo de sonda y procedimiento seguro','Comportamiento de la señal comparado (simulación)','Interpretar datos en conjunto con STFT y LTFT']]],
  ['combustible','Presión y suministro de combustible','engine',[
   ['Presión de alimentación','pressure','N/A','','','Equipo de presión compatible, sin fugas ni fuentes de ignición','Presión evaluada según montaje','No hay valor OEM definido para este vehículo'],
   ['Lectura de correcciones STFT/LTFT','scanner','N/A','','','Motor caliente en control cerrado','Correcciones examinadas','Evaluar en ralentí y carga']]],
@@ -132,6 +141,7 @@ const RULES=[
  ['maf','electrico',/maf|caudal de aire/],['map','electrico',/map|presi[oó]n absoluta/],['ect','electrico',/ect|temperatura de refrigerante/],
  ['ckp','electrico',/ckp|cig[uü]e[nñ]al/],['cmp','electrico',/cmp|[aá]rbol de levas/],['can','electrico',/can|comunicaci[oó]n/],
  ['aceleracion','motor',/mariposa|aceleraci[oó]n|ralent[ií]/],['admision','motor',/admisi[oó]n|vac[ií]o|manguera|fuga de aire/],
+ ['oxigeno','electrico',/sensor de oxigeno|sensor de oxígeno|sonda lambda|oxigeno|o2|sensor o₂|calefactor.*sonda|lambda|\bo2\b/],
  ['combustible','motor',/combustible|presi[oó]n de gasolina|correcci[oó]n|stft|ltft/],
  ['compresion','motor',/compresi[oó]n|leakdown/],['refrigeracion','motor',/refrigerante|termostato/],
  ['pastillas','frenos',/c[aá]liper|pastillas|discos|freno|gu[ií]a de caliper/],['abs','frenos',/abs|sensor de rueda/],

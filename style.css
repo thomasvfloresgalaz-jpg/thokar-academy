@@ -203,3 +203,22 @@ button:hover:not(:disabled){filter:brightness(1.05)}
  .client-card .online-chip{font-size:9px}.result-hero{padding:18px}
 }
 @media(prefers-reduced-motion:reduce){.catalog-tile,.catalog-test-list .test-card,.guide-unlock{animation:none!important}}
+
+/* THOKAR 2.7: catálogo sin salto vertical y ayuda dentro del caso */
+#tab-tools,#toolFilters,#testsList,.catalog-container,.catalog-grid {overflow-anchor:none}
+.case-help-actions{display:flex;gap:12px;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--border);padding:12px 14px;border-radius:15px;margin:0 0 13px}
+.case-help-actions strong{display:block;font-size:12px}
+.case-help-actions small{display:block;color:var(--secondary);font-size:10px;margin-top:3px;line-height:1.45}
+.case-help-buttons{display:flex;gap:8px;flex-shrink:0;align-items:center}
+.case-help-buttons button{padding:10px 11px;border-radius:11px;font-size:12px;min-height:39px;white-space:nowrap}
+.case-help-buttons #hintCounter{font-size:10px;color:var(--secondary);margin-left:2px}
+.quiet-danger{color:var(--red);background:color-mix(in srgb,var(--red) 8%,var(--surface));border:1px solid color-mix(in srgb,var(--red) 30%,var(--border));font-weight:750;transition:background .2s,transform .2s}
+.quiet-danger:active{transform:scale(.97)}
+.hint-panel{border:1px solid color-mix(in srgb,var(--amber) 30%,var(--border));border-radius:15px;padding:19px;background:color-mix(in srgb,var(--amber) 6%,var(--surface))}
+.hint-panel p{font-size:15px;line-height:1.7;color:var(--text)}
+.hint-panel small{color:var(--secondary)}
+.surrender-warning{border:1px solid color-mix(in srgb,var(--red) 32%,var(--border));background:color-mix(in srgb,var(--red) 7%,var(--surface));border-radius:15px;padding:16px}
+.surrender-warning p{font-size:12px;line-height:1.6}
+@media(max-width:620px){.case-help-actions{flex-direction:column;align-items:stretch;gap:9px}.case-help-buttons{justify-content:stretch}.case-help-buttons button{flex:1}}
+
+.verify-report-action{margin-top:12px}
